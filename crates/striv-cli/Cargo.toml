@@ -1,0 +1,11 @@
+[package]
+name = "striv-cli"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+striv-syntax = { path = "../striv-syntax" }
+striv-jit = { path = "../striv-jit" }
+lang-lsp = { path = "../lang-lsp" }
+lang-runtime = { path = "../lang-runtime" }
+tokio.workspace = true

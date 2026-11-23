@@ -1,6 +1,11 @@
 [workspace]
 resolver = "2"
-members = ["crates/lang-syntax", "crates/lang-jit", "crates/lang-cli"]
+members = [
+    "crates/striv-syntax",
+    "crates/striv-jit",
+    "crates/striv-cli",
+    "crates/lang-lsp", "crates/lang-runtime",
+]
 
 [workspace.dependencies]
 logos = "0.16.1"
@@ -8,3 +13,8 @@ cranelift = "0.138"
 cranelift-jit = "0.138"
 cranelift-module = "0.138"
 cranelift-native = "0.138"
+tower-lsp = "0.20"
+tokio = { version = "1", features = ["full"] }
+tiny_http = "0.12"
+minifb = "0.27"
+slotmap = "1.0"

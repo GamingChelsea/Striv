@@ -1,0 +1,11 @@
+{
+  "scopeName": "source.striv",
+  "patterns": [
+    { "match": "//.*$", "name": "comment.line.double-slash" },
+    { "match": "\\b(fn|let|mut|if|else|while|return|struct|impl|print|tweak|const|concurrent)\\b", "name": "keyword.control" },
+    { "match": "\\b(int|float|bool|String|Vec)\\b", "name": "storage.type" },
+    { "match": "\\b[A-Z][a-zA-Z0-9_]*\\b", "name": "entity.name.type" },
+    { "match": "\\b[a-z_][a-zA-Z0-9_]*(?=\\s*\\()", "name": "entity.name.function" },
+    { "match": "\\b[0-9]+\\b", "name": "constant.numeric" }
+  ]
+}

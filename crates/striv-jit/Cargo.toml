@@ -1,10 +1,11 @@
 [package]
-name = "lang-jit"
+name = "striv-jit"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-lang-syntax = { path = "../lang-syntax" }
+striv-syntax = { path = "../striv-syntax" }
+lang-runtime = { path = "../lang-runtime" }
 cranelift.workspace = true
 cranelift-jit.workspace = true
 cranelift-module.workspace = true

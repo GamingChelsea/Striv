@@ -1,0 +1,9 @@
+[package]
+name = "lang-lsp"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+striv-syntax = { path = "../striv-syntax" }
+tower-lsp.workspace = true
+tokio.workspace = true

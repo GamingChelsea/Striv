@@ -1,0 +1,25 @@
+tweak speed = 6
+tweak size = 60
+
+struct Game {
+    x: int,
+    y: int,
+}
+
+fn update(mut g: Game, win: int) -> int {
+    if key_down(win, 1) == 1 {
+        g.x = g.x - speed
+    }
+    if key_down(win, 2) == 1 {
+        g.x = g.x + speed
+    }
+    if key_down(win, 3) == 1 {
+        g.y = g.y - speed
+    }
+    if key_down(win, 4) == 1 {
+        g.y = g.y + speed
+    }
+    clear(win, 1515200)
+    draw_rect(win, g.x, g.y, size, size, 3915503)
+    return 0
+}

@@ -27,3 +27,6 @@ Thumbs.db
 # Environment variables
 .env
 .env.local
+
+# Node / VS Code extension dependencies
+node_modules/
