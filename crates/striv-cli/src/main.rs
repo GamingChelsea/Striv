@@ -110,6 +110,16 @@ fn main() {
                 std::thread::sleep(std::time::Duration::from_millis(800));
             }
         }
+        "sync" => {
+            let toml_path = args.get(2).map(|s| s.as_str()).unwrap_or("striv.toml");
+            let (code, summary) = lang_bindgen::sync_project(toml_path);
+            fs::write("crates/lang-runtime/src/generated_bridge.rs", code)
+                .expect("Could not write generated_bridge.rs");
+            println!(
+                "[Striv] Synced {} crate(s): {} struct vault(s), {} enum(s), {} function(s) -> crates/lang-runtime/src/generated_bridge.rs",
+                summary.crate_count, summary.struct_count, summary.enum_count, summary.fn_count
+            );
+        }
         "bindgen" => {
             let input = args
                 .get(2)

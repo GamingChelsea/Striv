@@ -1,0 +1,2 @@
+[dependencies]
+minifb = "0.27"

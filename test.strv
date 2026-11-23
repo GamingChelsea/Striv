@@ -1,27 +1,50 @@
+tweak move_speed = 6
+tweak jump_power = 15
+tweak size = 50
+
 struct Game {
     x: float,
     y: float,
     vel_y: float,
 }
 
-fn update(mut g: Game, win: int) -> int {
-    g.vel_y = g.vel_y + 0.65
-    g.y = g.y + g.vel_y
-    if g.y > 500.0 {
-        g.y = 500.0
-        g.vel_y = 0.0
+impl Game {
+    fn apply_gravity(mut self) -> int {
+        self.vel_y += 0.65
+        self.y += self.vel_y
+        let floor = 550 - size
+        if self.y > floor {
+            self.y = floor
+            self.vel_y = 0.0
+        }
+        return 0
     }
+
+    fn draw(self, win: int) -> int {
+        clear(win, 1974826)
+        for i in 0..10 {
+            draw_rect(win, i * 80, 550, 75, 20, 4080721)
+        }
+        draw_rect(win, self.x, self.y, size, size, 14707829)
+        return 0
+    }
+}
+
+fn update(mut g: Game, win: int) -> int {
+    g.apply_gravity()
     if key_down(win, 1) == 1 {
-        g.x = g.x - 6.0
+        g.x -= move_speed
     }
     if key_down(win, 2) == 1 {
-        g.x = g.x + 6.0
+        g.x += move_speed
     }
     if key_down(win, 5) == 1 {
-        g.vel_y = 0 - 14.5
+        let floor = 550 - size
+        if g.y == floor {
+            g.vel_y = 0 - jump_power
+            print("Sprung bei X = {g.x}!")
+        }
     }
-    g.x = clamp_val(g.x, 0, 750)
-    clear(win, 1974826)
-    draw_rect(win, g.x, g.y, 50, 50, 14707829)
+    g.draw(win)
     return 0
 }

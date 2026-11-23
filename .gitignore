@@ -30,3 +30,6 @@ Thumbs.db
 
 # Node / VS Code extension dependencies
 node_modules/
+
+# Striv auto-bindgen host cache
+.striv-host/

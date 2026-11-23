@@ -140,6 +140,43 @@ impl LanguageServer for StrivLsp {
             catch_unwind(AssertUnwindSafe(|| Parser::new(&clean_src).parse_program())).ok();
         let mut items = Vec::new();
 
+        // --- CASE 0: Path access (`Key::` or `Window::`) ---
+        if let Some(colon_idx) = before_cursor.rfind("::") {
+            let left = &before_cursor[..colon_idx];
+            let ty_name: String = left
+                .chars()
+                .rev()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect::<String>()
+                .chars()
+                .rev()
+                .collect();
+            let prefix = format!("{}__", ty_name);
+            for (k, _) in lang_runtime::generated_bridge::exported_constants() {
+                if let Some(member) = k.strip_prefix(&prefix) {
+                    items.push(CompletionItem {
+                        label: member.to_string(),
+                        kind: Some(CompletionItemKind::ENUM_MEMBER),
+                        sort_text: Some(format!("0_{}", member)),
+                        ..Default::default()
+                    });
+                }
+            }
+            for (s_name, _, _, _) in lang_runtime::generated_bridge::exported_symbols() {
+                if let Some(member) = s_name.strip_prefix(&prefix) {
+                    items.push(CompletionItem {
+                        label: member.to_string(),
+                        kind: Some(CompletionItemKind::FUNCTION),
+                        insert_text: Some(format!("{}($0)", member)),
+                        insert_text_format: Some(InsertTextFormat::SNIPPET),
+                        sort_text: Some(format!("1_{}", member)),
+                        ..Default::default()
+                    });
+                }
+            }
+            return Ok(Some(CompletionResponse::Array(items)));
+        }
+
         // --- CASE 1: Dot access (e.g. `hero.` or `hero.he`) ---
         if let Some(dot_idx) = before_cursor.rfind('.') {
             let left = &before_cursor[..dot_idx];
@@ -270,7 +307,7 @@ impl LanguageServer for StrivLsp {
 
         // --- CASE 3: General context (keywords with trailing space + functions) ---
         let keywords_with_space = [
-            "tweak", "struct", "impl", "fn", "let", "mut", "if", "while", "return",
+            "tweak", "struct", "impl", "fn", "let", "mut", "if", "while", "for", "in", "return",
         ];
         for kw in keywords_with_space {
             items.push(CompletionItem {

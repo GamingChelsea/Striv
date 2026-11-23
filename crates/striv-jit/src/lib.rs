@@ -47,6 +47,11 @@ enum VarInfo {
         var: Variable,
         is_mut: bool,
     },
+    Handle {
+        var: Variable,
+        type_name: String,
+        is_mut: bool,
+    },
     Tweak {
         addr: i64,
     },
@@ -602,6 +607,24 @@ fn compile_method_call(
     vars: &HashMap<String, VarInfo>,
     env: &mut CompileEnv,
 ) -> Value {
+    if let Some(VarInfo::Handle { var, type_name, .. }) = vars.get(receiver) {
+        let full_name = format!("{}__{}", type_name, method);
+        let (func_ref, _) = env
+            .funcs
+            .get(&full_name)
+            .unwrap_or_else(|| panic!("Unknown method '{}' on '{}'", method, type_name))
+            .clone();
+        let mut arg_vals = vec![builder.use_var(*var)];
+        for arg in args {
+            let mut val = compile_expr(arg, builder, vars, env);
+            if builder.func.dfg.value_type(val) == types::F64 {
+                val = builder.ins().fcvt_to_sint_sat(env.int_ty, val);
+            }
+            arg_vals.push(val);
+        }
+        let call = builder.ins().call(func_ref, &arg_vals);
+        return builder.inst_results(call)[0];
+    }
     if let Some(VarInfo::TweakVec { id }) = vars.get(receiver) {
         if method == "len" {
             let id_val = builder.ins().iconst(env.int_ty, *id as i64);
@@ -716,6 +739,22 @@ fn compile_stmt(
                     name.clone(),
                     VarInfo::Vec {
                         var,
+                        is_mut: *is_mut,
+                    },
+                );
+            } else if matches!(value, Expr::Call { name, .. } if name.contains("__")) {
+                let Expr::Call { name: fn_name, .. } = value else {
+                    unreachable!()
+                };
+                let type_name = fn_name.split("__").next().unwrap().to_string();
+                let ptr = compile_expr(value, builder, vars, env);
+                let var = builder.declare_var(env.int_ty);
+                builder.def_var(var, ptr);
+                vars.insert(
+                    name.clone(),
+                    VarInfo::Handle {
+                        var,
+                        type_name,
                         is_mut: *is_mut,
                     },
                 );
@@ -924,6 +963,94 @@ fn compile_stmt(
             builder.ins().call(env.vec_set_ref, &[v_ptr, idx_val, val]);
             false
         }
+        Stmt::CompoundAssign { target, op, value } => {
+            let desugared = match target {
+                striv_syntax::AssignTarget::Var(name) => Stmt::Assign {
+                    name: name.clone(),
+                    value: Expr::BinOp {
+                        left: Box::new(Expr::Var(name.clone())),
+                        op: *op,
+                        right: Box::new(value.clone()),
+                    },
+                },
+                striv_syntax::AssignTarget::Field { var, field } => Stmt::FieldAssign {
+                    var: var.clone(),
+                    field: field.clone(),
+                    value: Expr::BinOp {
+                        left: Box::new(Expr::FieldAccess {
+                            var: var.clone(),
+                            field: field.clone(),
+                        }),
+                        op: *op,
+                        right: Box::new(value.clone()),
+                    },
+                },
+                striv_syntax::AssignTarget::Index { var, index } => Stmt::IndexAssign {
+                    var: var.clone(),
+                    index: index.clone(),
+                    value: Expr::BinOp {
+                        left: Box::new(Expr::Index {
+                            var: var.clone(),
+                            index: Box::new(index.clone()),
+                        }),
+                        op: *op,
+                        right: Box::new(value.clone()),
+                    },
+                },
+            };
+            compile_stmt(&desugared, builder, vars, env, owned_strings, owned_vecs)
+        }
+        Stmt::ForRange {
+            var,
+            start,
+            end,
+            body,
+        } => {
+            let start_val = compile_expr(start, builder, vars, env);
+            let end_val = compile_expr(end, builder, vars, env);
+
+            let loop_var = builder.declare_var(env.int_ty);
+            builder.def_var(loop_var, start_val);
+            vars.insert(
+                var.clone(),
+                VarInfo::Int {
+                    var: loop_var,
+                    is_mut: false,
+                },
+            );
+
+            let header_bb = builder.create_block();
+            let body_bb = builder.create_block();
+            let exit_bb = builder.create_block();
+
+            builder.ins().jump(header_bb, &[]);
+            builder.switch_to_block(header_bb);
+
+            let curr = builder.use_var(loop_var);
+            let cond = builder.ins().icmp(IntCC::SignedLessThan, curr, end_val);
+            builder.ins().brif(cond, body_bb, &[], exit_bb, &[]);
+
+            builder.switch_to_block(body_bb);
+            builder.seal_block(body_bb);
+            let mut body_ret = false;
+            for s in body {
+                if compile_stmt(s, builder, vars, env, owned_strings, owned_vecs) {
+                    body_ret = true;
+                    break;
+                }
+            }
+            if !body_ret {
+                let cur_v = builder.use_var(loop_var);
+                let next_val = builder.ins().iadd_imm_s(cur_v, 1);
+                builder.def_var(loop_var, next_val);
+                builder.ins().jump(header_bb, &[]);
+            }
+            builder.seal_block(header_bb);
+
+            builder.switch_to_block(exit_bb);
+            builder.seal_block(exit_bb);
+            false
+        }
         Stmt::Return(expr) => {
             let val = compile_expr(expr, builder, vars, env);
             for s_var in owned_strings.iter() {
@@ -959,8 +1086,17 @@ fn compile_expr(
     env: &mut CompileEnv,
 ) -> Value {
     match expr {
-        Expr::Int(v) => builder.ins().iconst(env.int_ty, *v),
+        Expr::Int(v) | Expr::Hex(v) => builder.ins().iconst(env.int_ty, *v),
         Expr::Float(v) => builder.ins().f64const(*v),
+        Expr::PathConst { ty, member } => {
+            let key = format!("{}__{}", ty, member);
+            let val = lang_runtime::generated_bridge::exported_constants()
+                .iter()
+                .find(|(k, _)| *k == key)
+                .map(|(_, v)| *v)
+                .unwrap_or_else(|| panic!("Unknown constant `{}::{}`", ty, member));
+            builder.ins().iconst(env.int_ty, val)
+        }
         Expr::VecLit(items) => {
             let c_new = builder.ins().call(env.vec_new_ref, &[]);
             let v_ptr = builder.inst_results(c_new)[0];
@@ -1029,7 +1165,10 @@ fn compile_expr(
                                 continue;
                             }
                         }
-                        let num = compile_expr(inner, builder, vars, env);
+                        let mut num = compile_expr(inner, builder, vars, env);
+                        if builder.func.dfg.value_type(num) == types::F64 {
+                            num = builder.ins().fcvt_to_sint_sat(env.int_ty, num);
+                        }
                         let c = builder.ins().call(env.str_push_int_ref, &[s_ptr, num]);
                         s_ptr = builder.inst_results(c)[0];
                     }
@@ -1041,7 +1180,8 @@ fn compile_expr(
             Some(VarInfo::Int { var, .. })
             | Some(VarInfo::Float { var, .. })
             | Some(VarInfo::Str { var, .. })
-            | Some(VarInfo::Vec { var, .. }) => builder.use_var(*var),
+            | Some(VarInfo::Vec { var, .. })
+            | Some(VarInfo::Handle { var, .. }) => builder.use_var(*var),
             Some(VarInfo::Tweak { addr }) => {
                 let ptr_val = builder.ins().iconst(env.int_ty, *addr);
                 builder

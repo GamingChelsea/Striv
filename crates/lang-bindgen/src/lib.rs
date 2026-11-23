@@ -1,4 +1,19 @@
+pub mod codegen;
+pub mod scanner;
+
 use syn::{FnArg, Item, ReturnType, Type};
+
+pub fn sync_project(toml_path: &str) -> (String, codegen::SyncSummary) {
+    let content = std::fs::read_to_string(toml_path)
+        .unwrap_or_else(|e| panic!("Failed to read {}: {}", toml_path, e));
+    let deps = scanner::parse_striv_toml(&content);
+    let sources = scanner::resolve_crate_sources(&deps);
+    let apis: Vec<scanner::CrateApi> = sources
+        .iter()
+        .map(|(name, path)| scanner::scan_crate_api(name, path))
+        .collect();
+    codegen::emit_crate_bridge(&apis)
+}
 
 #[derive(Debug, Clone)]
 pub struct ExportedFn {

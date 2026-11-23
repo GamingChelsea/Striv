@@ -679,6 +679,8 @@ dependencies = [
 name = "lang-bindgen"
 version = "0.1.0"
 dependencies = [
+ "serde",
+ "serde_json",
  "syn 2.0.119",
 ]
 
@@ -686,6 +688,7 @@ dependencies = [
 name = "lang-lsp"
 version = "0.1.0"
 dependencies = [
+ "lang-runtime",
  "striv-syntax",
  "tokio",
  "tower-lsp",

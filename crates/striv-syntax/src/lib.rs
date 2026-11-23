@@ -29,7 +29,15 @@ pub struct StructDef {
 pub struct Function {
     pub name: String,
     pub params: Vec<(String, String, bool)>,
+    pub ret_type: Option<String>,
     pub body: Vec<Stmt>,
+}
+
+#[derive(Debug, Clone)]
+pub enum AssignTarget {
+    Var(String),
+    Field { var: String, field: String },
+    Index { var: String, index: Expr },
 }
 
 #[derive(Debug, Clone)]
@@ -63,6 +71,17 @@ pub enum Stmt {
         cond: Expr,
         body: Vec<Stmt>,
     },
+    ForRange {
+        var: String,
+        start: Expr,
+        end: Expr,
+        body: Vec<Stmt>,
+    },
+    CompoundAssign {
+        target: AssignTarget,
+        op: Op,
+        value: Expr,
+    },
     Return(Expr),
     Call {
         name: String,
@@ -84,7 +103,12 @@ pub enum StringPart {
 #[derive(Debug, Clone)]
 pub enum Expr {
     Int(i64),
+    Hex(i64),
     Float(f64),
+    PathConst {
+        ty: String,
+        member: String,
+    },
     StrInterp(Vec<StringPart>),
     VecLit(Vec<Expr>),
     Index {
@@ -154,6 +178,10 @@ pub enum Token {
     Print,
     #[token("while")]
     While,
+    #[token("for")]
+    For,
+    #[token("in")]
+    In,
     #[token("(")]
     LParen,
     #[token(")")]
@@ -166,12 +194,20 @@ pub enum Token {
     LBracket,
     #[token("]")]
     RBracket,
+    #[token("::")]
+    ColonColon,
     #[token(":")]
     Colon,
+    #[token("..")]
+    DotDot,
     #[token(".")]
     Dot,
     #[token(",")]
     Comma,
+    #[token("+=")]
+    PlusEq,
+    #[token("-=")]
+    MinusEq,
     #[token("->")]
     Arrow,
     #[token("==")]
@@ -194,6 +230,7 @@ pub enum Token {
     #[regex("[0-9]+\\.[0-9]+", |lex| lex.slice().parse::<f64>().ok())]
     Float(f64),
     #[regex("0x[0-9a-fA-F]+", |lex| i64::from_str_radix(&lex.slice()[2..], 16).ok())]
+    Hex(i64),
     #[regex("[0-9]+", |lex| lex.slice().parse::<i64>().ok())]
     Int(i64),
 
@@ -219,6 +256,8 @@ impl Token {
             Token::If => "`if`".to_string(),
             Token::Else => "`else`".to_string(),
             Token::While => "`while`".to_string(),
+            Token::For => "`for`".to_string(),
+            Token::In => "`in`".to_string(),
             Token::Return => "`return`".to_string(),
             Token::Print => "`print`".to_string(),
             Token::LParen => "`(`".to_string(),
@@ -227,10 +266,14 @@ impl Token {
             Token::RBrace => "`}`".to_string(),
             Token::LBracket => "`[`".to_string(),
             Token::RBracket => "`]`".to_string(),
+            Token::ColonColon => "`::`".to_string(),
             Token::Colon => "`:`".to_string(),
             Token::Comma => "`,`".to_string(),
+            Token::DotDot => "`..`".to_string(),
             Token::Dot => "`.`".to_string(),
             Token::Arrow => "`->`".to_string(),
+            Token::PlusEq => "`+=`".to_string(),
+            Token::MinusEq => "`-=`".to_string(),
             Token::Assign => "`=`".to_string(),
             Token::EqEq => "`==`".to_string(),
             Token::Plus => "`+`".to_string(),
@@ -240,6 +283,7 @@ impl Token {
             Token::Lt => "`<`".to_string(),
             Token::Gt => "`>`".to_string(),
             Token::Float(f) => format!("number `{}`", f),
+            Token::Hex(h) => format!("`0x{:X}`", h),
             Token::Int(n) => format!("number `{}`", n),
             Token::Ident(s) => format!("`{}`", s),
             Token::Str(s) => format!("\"{}\"", s),
@@ -429,13 +473,19 @@ impl Parser {
             }
         }
         self.expect(Token::RParen);
-        if self.peek() == Some(&Token::Arrow) {
+        let ret_type = if self.peek() == Some(&Token::Arrow) {
             self.next();
-            self.next();
-        }
+            let Some(Token::Ident(rt)) = self.next() else {
+                self.error("Expected return type after `->`");
+            };
+            Some(rt)
+        } else {
+            None
+        };
         Function {
             name: format!("{}__{}", struct_name, m_name),
             params,
+            ret_type,
             body: self.parse_block(),
         }
     }
@@ -468,13 +518,19 @@ impl Parser {
             }
         }
         self.expect(Token::RParen);
-        if self.peek() == Some(&Token::Arrow) {
+        let ret_type = if self.peek() == Some(&Token::Arrow) {
             self.next();
-            self.next();
-        }
+            let Some(Token::Ident(rt)) = self.next() else {
+                self.error("Expected return type after `->`");
+            };
+            Some(rt)
+        } else {
+            None
+        };
         Function {
             name,
             params,
+            ret_type,
             body: self.parse_block(),
         }
     }
@@ -532,6 +588,26 @@ impl Parser {
                 self.expect(Token::RParen);
                 Stmt::Print(expr)
             }
+            Some(Token::For) => {
+                self.next(); // consume `for`
+                if self.peek() == Some(&Token::Mut) {
+                    self.next();
+                }
+                let Some(Token::Ident(var)) = self.next() else {
+                    self.error("Expected loop variable after `for` (e.g. `for i in 0..10`)");
+                };
+                self.expect(Token::In);
+                let start = self.parse_expr();
+                self.expect(Token::DotDot);
+                let end = self.parse_expr();
+                let body = self.parse_block();
+                Stmt::ForRange {
+                    var,
+                    start,
+                    end,
+                    body,
+                }
+            }
             Some(Token::While) => {
                 self.next();
                 let cond = self.parse_expr();
@@ -547,7 +623,16 @@ impl Parser {
                 let Some(Token::Ident(name)) = self.next() else {
                     unreachable!()
                 };
-                if self.peek() == Some(&Token::LParen) {
+                if self.peek() == Some(&Token::ColonColon) {
+                    self.next(); // consume `::`
+                    let Some(Token::Ident(member)) = self.next() else {
+                        self.error("Expected name after `::`");
+                    };
+                    Stmt::Call {
+                        name: format!("{}__{}", name, member),
+                        args: self.parse_args(),
+                    }
+                } else if self.peek() == Some(&Token::LParen) {
                     Stmt::Call {
                         name,
                         args: self.parse_args(),
@@ -557,28 +642,100 @@ impl Parser {
                     let Some(Token::Ident(member)) = self.next() else {
                         self.error("Expected field or method name after `.`");
                     };
-                    if self.peek() == Some(&Token::LParen) {
+                    if self.peek() == Some(&Token::ColonColon) {
+                        self.next(); // consume `::`
+                        let Some(Token::Ident(member)) = self.next() else {
+                            self.error("Expected name after `::`");
+                        };
+                        Stmt::Call {
+                            name: format!("{}__{}", name, member),
+                            args: self.parse_args(),
+                        }
+                    } else if self.peek() == Some(&Token::LParen) {
                         Stmt::MethodCall {
                             receiver: name,
                             method: member,
                             args: self.parse_args(),
                         }
                     } else {
-                        self.expect(Token::Assign);
-                        Stmt::FieldAssign {
-                            var: name,
-                            field: member,
-                            value: self.parse_expr(),
+                        match self.peek() {
+                            Some(Token::PlusEq) => {
+                                self.next();
+                                Stmt::CompoundAssign {
+                                    target: AssignTarget::Field {
+                                        var: name,
+                                        field: member,
+                                    },
+                                    op: Op::Add,
+                                    value: self.parse_expr(),
+                                }
+                            }
+                            Some(Token::MinusEq) => {
+                                self.next();
+                                Stmt::CompoundAssign {
+                                    target: AssignTarget::Field {
+                                        var: name,
+                                        field: member,
+                                    },
+                                    op: Op::Sub,
+                                    value: self.parse_expr(),
+                                }
+                            }
+                            _ => {
+                                self.expect(Token::Assign);
+                                Stmt::FieldAssign {
+                                    var: name,
+                                    field: member,
+                                    value: self.parse_expr(),
+                                }
+                            }
                         }
                     }
                 } else if self.peek() == Some(&Token::LBracket) {
                     self.next(); // `[`
                     let idx = self.parse_expr();
                     self.expect(Token::RBracket);
-                    self.expect(Token::Assign);
-                    Stmt::IndexAssign {
-                        var: name,
-                        index: idx,
+                    match self.peek() {
+                        Some(Token::PlusEq) => {
+                            self.next();
+                            Stmt::CompoundAssign {
+                                target: AssignTarget::Index {
+                                    var: name,
+                                    index: idx,
+                                },
+                                op: Op::Add,
+                                value: self.parse_expr(),
+                            }
+                        }
+                        Some(Token::MinusEq) => {
+                            self.next();
+                            Stmt::CompoundAssign {
+                                target: AssignTarget::Index {
+                                    var: name,
+                                    index: idx,
+                                },
+                                op: Op::Sub,
+                                value: self.parse_expr(),
+                            }
+                        }
+                        _ => {
+                            self.expect(Token::Assign);
+                            Stmt::IndexAssign {
+                                var: name,
+                                index: idx,
+                                value: self.parse_expr(),
+                            }
+                        }
+                    }
+                } else if matches!(self.peek(), Some(Token::PlusEq | Token::MinusEq)) {
+                    let op = if self.next() == Some(Token::PlusEq) {
+                        Op::Add
+                    } else {
+                        Op::Sub
+                    };
+                    Stmt::CompoundAssign {
+                        target: AssignTarget::Var(name),
+                        op,
                         value: self.parse_expr(),
                     }
                 } else if self.peek() == Some(&Token::Assign) {
@@ -637,12 +794,21 @@ impl Parser {
     fn parse_primary(&mut self) -> Expr {
         match self.next() {
             Some(Token::Int(v)) => Expr::Int(v),
+            Some(Token::Hex(v)) => Expr::Hex(v),
             Some(Token::Float(v)) => Expr::Float(v),
-            Some(Token::Minus) => Expr::BinOp {
-                left: Box::new(Expr::Int(0)),
-                op: Op::Sub,
-                right: Box::new(self.parse_primary()),
-            },
+            Some(Token::Minus) => {
+                let inner = self.parse_primary();
+                let zero = if matches!(inner, Expr::Float(_)) {
+                    Expr::Float(0.0)
+                } else {
+                    Expr::Int(0)
+                };
+                Expr::BinOp {
+                    left: Box::new(zero),
+                    op: Op::Sub,
+                    right: Box::new(inner),
+                }
+            }
             Some(Token::Str(raw)) => {
                 let mut parts = Vec::new();
                 let mut rest = raw.as_str();
@@ -665,7 +831,20 @@ impl Parser {
                 Expr::StrInterp(parts)
             }
             Some(Token::Ident(n)) => {
-                if self.peek() == Some(&Token::LParen) {
+                if self.peek() == Some(&Token::ColonColon) {
+                    self.next(); // consume `::`
+                    let Some(Token::Ident(member)) = self.next() else {
+                        self.error("Expected name after `::`");
+                    };
+                    if self.peek() == Some(&Token::LParen) {
+                        Expr::Call {
+                            name: format!("{}__{}", n, member),
+                            args: self.parse_args(),
+                        }
+                    } else {
+                        Expr::PathConst { ty: n, member }
+                    }
+                } else if self.peek() == Some(&Token::LParen) {
                     Expr::Call {
                         name: n,
                         args: self.parse_args(),
@@ -847,6 +1026,10 @@ fn check_stmts_mut(
                 check_stmts_mut(src, else_block, mut_vars, errors);
             }
             Stmt::While { body, .. } => {
+                check_stmts_mut(src, body, mut_vars, errors);
+            }
+            Stmt::ForRange { var, body, .. } => {
+                mut_vars.insert(var.clone(), false);
                 check_stmts_mut(src, body, mut_vars, errors);
             }
             _ => {}

@@ -81,11 +81,16 @@ fn format_fn(f: &Function, display_name: &str, level: usize, out: &mut String) {
             }
         })
         .collect();
+    let ret_str = match &f.ret_type {
+        Some(rt) => format!(" -> {}", rt),
+        None => String::new(),
+    };
     out.push_str(&format!(
-        "{}fn {}({}) -> int {{\n",
+        "{}fn {}({}){} {{\n",
         ind,
         display_name,
-        params_str.join(", ")
+        params_str.join(", "),
+        ret_str
     ));
     for stmt in &f.body {
         format_stmt(stmt, level + 1, out);
@@ -174,6 +179,41 @@ fn format_stmt(stmt: &Stmt, level: usize, out: &mut String) {
             }
             out.push_str(&format!("{}}}\n", ind));
         }
+        Stmt::ForRange {
+            var,
+            start,
+            end,
+            body,
+        } => {
+            out.push_str(&format!(
+                "{}for {} in {}..{} {{\n",
+                ind,
+                var,
+                format_expr(start),
+                format_expr(end)
+            ));
+            for s in body {
+                format_stmt(s, level + 1, out);
+            }
+            out.push_str(&format!("{}}}\n", ind));
+        }
+        Stmt::CompoundAssign { target, op, value } => {
+            let op_str = if *op == Op::Add { "+=" } else { "-=" };
+            let lhs = match target {
+                crate::AssignTarget::Var(n) => n.clone(),
+                crate::AssignTarget::Field { var, field } => format!("{}.{}", var, field),
+                crate::AssignTarget::Index { var, index } => {
+                    format!("{}[{}]", var, format_expr(index))
+                }
+            };
+            out.push_str(&format!(
+                "{}{} {} {}\n",
+                ind,
+                lhs,
+                op_str,
+                format_expr(value)
+            ));
+        }
         Stmt::Return(e) => {
             out.push_str(&format!("{}return {}\n", ind, format_expr(e)));
         }
@@ -187,7 +227,9 @@ fn format_args(args: &[Expr]) -> String {
 fn format_expr(expr: &Expr) -> String {
     match expr {
         Expr::Int(v) => v.to_string(),
+        Expr::Hex(v) => format!("0x{:X}", v),
         Expr::Float(v) => format!("{:?}", v),
+        Expr::PathConst { ty, member } => format!("{}::{}", ty, member),
         Expr::VecLit(items) => format!("[{}]", format_args(items)),
         Expr::Index { var, index } => format!("{}[{}]", var, format_expr(index)),
         Expr::StrInterp(parts) => {
@@ -217,6 +259,16 @@ fn format_expr(expr: &Expr) -> String {
             format!("{} {{ {} }}", name, f_str.join(", "))
         }
         Expr::BinOp { left, op, right } => {
+            if *op == Op::Sub && matches!(&**left, Expr::Int(0)) {
+                return format!("-{}", format_expr(right));
+            }
+            if *op == Op::Sub {
+                if let Expr::Float(f) = &**left {
+                    if *f == 0.0 {
+                        return format!("-{}", format_expr(right));
+                    }
+                }
+            }
             let op_str = match op {
                 Op::Add => "+",
                 Op::Sub => "-",
