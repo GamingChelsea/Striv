@@ -1,3 +1,17 @@
+fn safe_div(a: int, b: int) -> Result {
+    if b == 0 {
+        return Err(1)
+    }
+    return Ok(a / b)
+}
+
+fn find_bonus(x: int) -> Option {
+    if x > 200 {
+        return Some(50)
+    }
+    return None
+}
+
 fn fill_rect(mut buf: Vec, x0: int, y0: int, w: int, h: int, color: int) {
     for y in y0..y0 + h {
         if y > 0 {
@@ -15,6 +29,12 @@ fn fill_rect(mut buf: Vec, x0: int, y0: int, w: int, h: int, color: int) {
 }
 
 fn main() -> int {
+    let half = safe_div(100, 2)?
+    let bonus = find_bonus(300)?
+    print("safe_div(100, 2) = {half}, bonus = {bonus}")
+    let half = safe_div(100, 2)?
+    let bonus = find_bonus(300)?
+    print("safe_div(100, 2) = {half}, bonus = {bonus}")
     let opts = WindowOptions::default()
     let mut win = Window::new("100% Auto Bindgen Striv!", 800, 600, opts)
     let mut buf = []

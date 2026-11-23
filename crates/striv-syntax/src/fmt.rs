@@ -142,6 +142,9 @@ fn format_stmt(stmt: &Stmt, level: usize, out: &mut String) {
         Stmt::Call { name, args } => {
             out.push_str(&format!("{}{}({})\n", ind, name, format_args(args)));
         }
+        Stmt::Expr(e) => {
+            out.push_str(&format!("{}{}\n", ind, format_expr(e)));
+        }
         Stmt::MethodCall {
             receiver,
             method,
@@ -228,6 +231,11 @@ fn format_expr(expr: &Expr) -> String {
     match expr {
         Expr::Int(v) => v.to_string(),
         Expr::Hex(v) => format!("0x{:X}", v),
+        Expr::Ok(e) => format!("Ok({})", format_expr(e)),
+        Expr::Err(e) => format!("Err({})", format_expr(e)),
+        Expr::Some(e) => format!("Some({})", format_expr(e)),
+        Expr::None => "None".to_string(),
+        Expr::Try(e) => format!("{}?", format_expr(e)),
         Expr::Float(v) => format!("{:?}", v),
         Expr::PathConst { ty, member } => format!("{}::{}", ty, member),
         Expr::VecLit(items) => format!("[{}]", format_args(items)),

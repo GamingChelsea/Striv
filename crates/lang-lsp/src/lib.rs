@@ -64,6 +64,7 @@ impl LanguageServer for StrivLsp {
                     ..Default::default()
                 }),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
+                inlay_hint_provider: Some(OneOf::Left(true)),
                 signature_help_provider: Some(SignatureHelpOptions {
                     trigger_characters: Some(vec!["(".to_string(), ",".to_string()]),
                     retrigger_characters: Some(vec![",".to_string()]),
@@ -325,7 +326,7 @@ impl LanguageServer for StrivLsp {
         let after_arrow = trimmed.ends_with("->");
 
         if after_colon || after_arrow {
-            for ty in ["int", "float", "bool", "String", "Vec"] {
+            for ty in ["int", "float", "bool", "String", "Vec", "Result", "Option"] {
                 items.push(CompletionItem {
                     label: ty.to_string(),
                     kind: Some(CompletionItemKind::TYPE_PARAMETER),
@@ -392,6 +393,22 @@ impl LanguageServer for StrivLsp {
             sort_text: Some("1_print".to_string()),
             ..Default::default()
         });
+        for (kw, snip, detail) in [
+            ("Ok", "Ok($0)", "Result::Ok(val)"),
+            ("Err", "Err($0)", "Result::Err(err)"),
+            ("Some", "Some($0)", "Option::Some(val)"),
+            ("None", "None", "Option::None"),
+        ] {
+            items.push(CompletionItem {
+                label: kw.to_string(),
+                kind: Some(CompletionItemKind::ENUM_MEMBER),
+                insert_text: Some(snip.to_string()),
+                insert_text_format: Some(InsertTextFormat::SNIPPET),
+                detail: Some(detail.to_string()),
+                sort_text: Some(format!("1_{}", kw)),
+                ..Default::default()
+            });
+        }
         for (fn_name, snip, detail) in [
             ("clear", "clear($0)", "fn clear(win: int, color: int)"),
             (
@@ -689,6 +706,137 @@ impl LanguageServer for StrivLsp {
 
         Ok(None)
     }
+
+    // 5. INLAY HINTS (`: Type` after `let` and `for` variables, like rust-analyzer)
+    async fn inlay_hint(&self, params: InlayHintParams) -> Result<Option<Vec<InlayHint>>> {
+        let docs = self.documents.read().await;
+        let Some(src) = docs.get(&params.text_document.uri) else {
+            return Ok(None);
+        };
+
+        let prog = catch_unwind(AssertUnwindSafe(|| Parser::new(src).parse_program())).ok();
+        let mut hints = Vec::new();
+        let start_line = params.range.start.line as usize;
+        let end_line = params.range.end.line as usize;
+
+        for (line_idx, line) in src.lines().enumerate() {
+            if line_idx < start_line || line_idx > end_line {
+                continue;
+            }
+            let trimmed = line.trim_start();
+            let indent_len = line.len() - trimmed.len();
+
+            if let Some(after_let) = trimmed.strip_prefix("let ") {
+                let is_mut = after_let.starts_with("mut ");
+                let var_start_offset = indent_len + 4 + if is_mut { 4 } else { 0 };
+                let rest = if is_mut { &after_let[4..] } else { after_let };
+                if let Some((lhs, rhs)) = rest.split_once('=') {
+                    if lhs.contains(':') {
+                        continue;
+                    }
+                    let var_name = lhs.trim_end();
+                    if var_name.is_empty()
+                        || !var_name.chars().all(|c| c.is_alphanumeric() || c == '_')
+                    {
+                        continue;
+                    }
+                    let col = (var_start_offset + lhs.len() - (lhs.len() - var_name.len())) as u32;
+                    let ty = infer_expr_type(rhs.trim(), prog.as_ref());
+                    hints.push(InlayHint {
+                        position: Position::new(line_idx as u32, col),
+                        label: InlayHintLabel::String(format!(": {}", ty)),
+                        kind: Some(InlayHintKind::TYPE),
+                        text_edits: None,
+                        tooltip: None,
+                        padding_left: None,
+                        padding_right: Some(false),
+                        data: None,
+                    });
+                }
+            } else if let Some(after_for) = trimmed.strip_prefix("for ") {
+                if let Some((var_part, _)) = after_for.split_once(" in ") {
+                    let var_name = var_part.trim();
+                    if !var_name.is_empty()
+                        && var_name.chars().all(|c| c.is_alphanumeric() || c == '_')
+                    {
+                        let col = (indent_len + 4 + var_part.trim_end().len()) as u32;
+                        hints.push(InlayHint {
+                            position: Position::new(line_idx as u32, col),
+                            label: InlayHintLabel::String(": int".to_string()),
+                            kind: Some(InlayHintKind::TYPE),
+                            text_edits: None,
+                            tooltip: None,
+                            padding_left: None,
+                            padding_right: Some(false),
+                            data: None,
+                        });
+                    }
+                }
+            }
+        }
+
+        Ok(Some(hints))
+    }
+}
+
+fn infer_expr_type(rhs: &str, prog: Option<&striv_syntax::Program>) -> String {
+    let has_try = rhs.ends_with('?');
+    let expr = rhs.trim_end_matches('?').trim();
+
+    if expr.starts_with('"') {
+        return "String".to_string();
+    }
+    if expr.starts_with('[') {
+        return "Vec".to_string();
+    }
+    if expr.starts_with("Ok(") || expr.starts_with("Err(") {
+        return "Result".to_string();
+    }
+    if expr.starts_with("Some(") || expr == "None" {
+        return "Option".to_string();
+    }
+    if expr.contains('.')
+        && expr
+            .chars()
+            .all(|c| c.is_ascii_digit() || c == '.' || c == '-')
+    {
+        return "float".to_string();
+    }
+    if expr.starts_with("0x") || expr.chars().all(|c| c.is_ascii_digit() || c == '-') {
+        return "int".to_string();
+    }
+    if let Some((before_brace, _)) = expr.split_once('{') {
+        let s = before_brace.trim();
+        if s.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) {
+            return s.to_string();
+        }
+    }
+    if let Some((before_paren, _)) = expr.split_once('(') {
+        let call = before_paren.trim();
+        let lookup = call.replace("::", "__");
+        if let Some((_, sig, _)) = lang_runtime::generated_bridge::exported_docs()
+            .iter()
+            .find(|(n, _, _)| *n == lookup)
+        {
+            if let Some((_, ret)) = sig.split_once("->") {
+                return ret.trim().to_string();
+            }
+        }
+        if let Some(p) = prog {
+            if let Some(func) = p.functions.iter().find(|f| f.name == lookup) {
+                if let Some(rt) = &func.ret_type {
+                    if has_try && (rt == "Result" || rt == "Option") {
+                        return "int".to_string();
+                    }
+                    return rt.clone();
+                }
+            }
+        }
+        if let Some((ty, _)) = call.split_once("::") {
+            return ty.trim().to_string();
+        }
+    }
+    "int".to_string()
 }
 
 fn extract_symbol_at(line: &str, col: usize) -> String {

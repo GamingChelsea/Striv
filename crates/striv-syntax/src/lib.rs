@@ -60,7 +60,8 @@ pub enum Stmt {
         var: String,
         index: Expr,
         value: Expr,
-    }, // e.g. p.hp = 80
+    },
+    Expr(Expr), // e.g. p.hp = 80
     If {
         cond: Expr,
         then_block: Vec<Stmt>,
@@ -110,6 +111,11 @@ pub enum Expr {
         member: String,
     },
     StrInterp(Vec<StringPart>),
+    Ok(Box<Expr>),
+    Err(Box<Expr>),
+    Some(Box<Expr>),
+    None,
+    Try(Box<Expr>),
     VecLit(Vec<Expr>),
     Index {
         var: String,
@@ -182,6 +188,16 @@ pub enum Token {
     For,
     #[token("in")]
     In,
+    #[token("Ok")]
+    OkKw,
+    #[token("Err")]
+    ErrKw,
+    #[token("Some")]
+    SomeKw,
+    #[token("None")]
+    NoneKw,
+    #[token("?")]
+    Question,
     #[token("(")]
     LParen,
     #[token(")")]
@@ -258,6 +274,11 @@ impl Token {
             Token::While => "`while`".to_string(),
             Token::For => "`for`".to_string(),
             Token::In => "`in`".to_string(),
+            Token::OkKw => "`Ok`".to_string(),
+            Token::ErrKw => "`Err`".to_string(),
+            Token::SomeKw => "`Some`".to_string(),
+            Token::NoneKw => "`None`".to_string(),
+            Token::Question => "`?`".to_string(),
             Token::Return => "`return`".to_string(),
             Token::Print => "`print`".to_string(),
             Token::LParen => "`(`".to_string(),
@@ -652,10 +673,20 @@ impl Parser {
                             args: self.parse_args(),
                         }
                     } else if self.peek() == Some(&Token::LParen) {
-                        Stmt::MethodCall {
-                            receiver: name,
-                            method: member,
-                            args: self.parse_args(),
+                        let args = self.parse_args();
+                        if self.peek() == Some(&Token::Question) {
+                            self.next();
+                            Stmt::Expr(Expr::Try(Box::new(Expr::MethodCall {
+                                receiver: name,
+                                method: member,
+                                args,
+                            })))
+                        } else {
+                            Stmt::MethodCall {
+                                receiver: name,
+                                method: member,
+                                args,
+                            }
                         }
                     } else {
                         match self.peek() {
@@ -792,7 +823,36 @@ impl Parser {
     }
 
     fn parse_primary(&mut self) -> Expr {
+        let base = self.parse_atom();
+        if self.peek() == Some(&Token::Question) {
+            self.next(); // consume `?`
+            Expr::Try(Box::new(base))
+        } else {
+            base
+        }
+    }
+
+    fn parse_atom(&mut self) -> Expr {
         match self.next() {
+            Some(Token::OkKw) => {
+                self.expect(Token::LParen);
+                let inner = self.parse_expr();
+                self.expect(Token::RParen);
+                Expr::Ok(Box::new(inner))
+            }
+            Some(Token::ErrKw) => {
+                self.expect(Token::LParen);
+                let inner = self.parse_expr();
+                self.expect(Token::RParen);
+                Expr::Err(Box::new(inner))
+            }
+            Some(Token::SomeKw) => {
+                self.expect(Token::LParen);
+                let inner = self.parse_expr();
+                self.expect(Token::RParen);
+                Expr::Some(Box::new(inner))
+            }
+            Some(Token::NoneKw) => Expr::None,
             Some(Token::Int(v)) => Expr::Int(v),
             Some(Token::Hex(v)) => Expr::Hex(v),
             Some(Token::Float(v)) => Expr::Float(v),

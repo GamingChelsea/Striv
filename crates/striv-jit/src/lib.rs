@@ -84,6 +84,8 @@ struct CompileEnv<'a> {
     str_free_ref: cranelift::codegen::ir::FuncRef,
     tweak_get_str_ref: cranelift::codegen::ir::FuncRef,
     tweak_get_vec_ref: cranelift::codegen::ir::FuncRef,
+    set_err_ref: cranelift::codegen::ir::FuncRef,
+    take_err_ref: cranelift::codegen::ir::FuncRef,
     vec_new_ref: cranelift::codegen::ir::FuncRef,
     vec_push_ref: cranelift::codegen::ir::FuncRef,
     vec_get_ref: cranelift::codegen::ir::FuncRef,
@@ -146,6 +148,8 @@ impl JitCompiler {
         builder.symbol("striv_clear", lang_runtime::striv_clear as *const u8);
         builder.symbol("striv_rect", lang_runtime::striv_rect as *const u8);
         builder.symbol("striv_key_down", lang_runtime::striv_key_down as *const u8);
+        builder.symbol("striv_set_err", lang_runtime::striv_set_err as *const u8);
+        builder.symbol("striv_take_err", lang_runtime::striv_take_err as *const u8);
         for &(_, c_sym, ptr, _) in lang_runtime::generated_bridge::exported_symbols() {
             builder.symbol(c_sym, ptr);
         }
@@ -290,6 +294,17 @@ impl JitCompiler {
             .declare_function("striv_rect", Linkage::Import, &sig_rect)
             .unwrap();
 
+        let set_err_id = self
+            .module
+            .declare_function("striv_set_err", Linkage::Import, &sig_tweak_str)
+            .unwrap();
+        let mut sig_take_err = self.module.make_signature();
+        sig_take_err.returns.push(AbiParam::new(int_ty));
+        let take_err_id = self
+            .module
+            .declare_function("striv_take_err", Linkage::Import, &sig_take_err)
+            .unwrap();
+
         // 1. Pre-register all functions so they can call each other
         let mut func_ids = Vec::new();
         for func in &prog.functions {
@@ -382,6 +397,8 @@ impl JitCompiler {
                     tweak_get_vec_ref: self
                         .module
                         .declare_func_in_func(tweak_get_vec_id, builder.func),
+                    set_err_ref: self.module.declare_func_in_func(set_err_id, builder.func),
+                    take_err_ref: self.module.declare_func_in_func(take_err_id, builder.func),
                     vec_new_ref: self.module.declare_func_in_func(vec_new_id, builder.func),
                     vec_push_ref: self.module.declare_func_in_func(vec_push_id, builder.func),
                     vec_get_ref: self.module.declare_func_in_func(vec_get_id, builder.func),
@@ -1076,6 +1093,10 @@ fn compile_stmt(
             compile_call(name, args, builder, vars, env);
             false
         }
+        Stmt::Expr(expr) => {
+            compile_expr(expr, builder, vars, env);
+            false
+        }
         Stmt::MethodCall {
             receiver,
             method,
@@ -1095,6 +1116,36 @@ fn compile_expr(
 ) -> Value {
     match expr {
         Expr::Int(v) | Expr::Hex(v) => builder.ins().iconst(env.int_ty, *v),
+        Expr::Ok(inner) | Expr::Some(inner) => compile_expr(inner, builder, vars, env),
+        Expr::None => {
+            let one = builder.ins().iconst(env.int_ty, 1);
+            builder.ins().call(env.set_err_ref, &[one]);
+            builder.ins().iconst(env.int_ty, 0)
+        }
+        Expr::Err(inner) => {
+            let code = compile_expr(inner, builder, vars, env);
+            builder.ins().call(env.set_err_ref, &[code]);
+            builder.ins().iconst(env.int_ty, 0)
+        }
+        Expr::Try(inner) => {
+            let val = compile_expr(inner, builder, vars, env);
+            let c_err = builder.ins().call(env.take_err_ref, &[]);
+            let err_tag = builder.inst_results(c_err)[0];
+
+            let ok_bb = builder.create_block();
+            let err_bb = builder.create_block();
+            builder.ins().brif(err_tag, err_bb, &[], ok_bb, &[]);
+
+            builder.switch_to_block(err_bb);
+            builder.seal_block(err_bb);
+            builder.ins().call(env.set_err_ref, &[err_tag]);
+            let zero = builder.ins().iconst(env.int_ty, 0);
+            builder.ins().return_(&[zero]);
+
+            builder.switch_to_block(ok_bb);
+            builder.seal_block(ok_bb);
+            val
+        }
         Expr::Float(v) => builder.ins().f64const(*v),
         Expr::PathConst { ty, member } => {
             let key = format!("{}__{}", ty, member);

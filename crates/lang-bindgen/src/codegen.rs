@@ -205,14 +205,12 @@ pub fn emit_crate_bridge(apis: &[CrateApi]) -> (String, SyncSummary) {
                 RetKind::ResultHandle(s) => {
                     let vault = format!("VAULT_{}_{}", cr.to_uppercase(), s.to_uppercase());
                     out.push_str(&format!(
-                        "    let res = ({}).expect(\"Rust call returned Err\");\n    {vault}.with(|v| v.borrow_mut().insert(res).data().as_ffi() as i64)\n",
-                        call_expr
+                        "    match {call_expr} {{\n        Ok(res) => {vault}.with(|v| v.borrow_mut().insert(res).data().as_ffi() as i64),\n        Err(_) => crate::striv_set_err(1),\n    }}\n"
                     ));
                 }
                 RetKind::ResultUnit => {
                     out.push_str(&format!(
-                        "    if ({}).is_ok() {{ 1 }} else {{ 0 }}\n",
-                        call_expr
+                        "    match {call_expr} {{\n        Ok(_) => 1,\n        Err(_) => crate::striv_set_err(1),\n    }}\n"
                     ));
                 }
             }

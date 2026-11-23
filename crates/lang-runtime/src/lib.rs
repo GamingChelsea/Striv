@@ -426,3 +426,24 @@ pub extern "C" fn striv_key_down(handle_bits: i64, key_code: i64) -> i64 {
             .unwrap_or(0)
     })
 }
+
+use std::cell::Cell;
+
+thread_local! {
+    static LAST_ERROR: Cell<i64> = const { Cell::new(0) };
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_set_err(code: i64) -> i64 {
+    LAST_ERROR.with(|e| e.set(if code == 0 { 1 } else { code }));
+    0
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_take_err() -> i64 {
+    LAST_ERROR.with(|e| {
+        let val = e.get();
+        e.set(0);
+        val
+    })
+}
