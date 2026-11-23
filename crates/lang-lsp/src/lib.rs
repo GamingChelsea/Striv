@@ -63,6 +63,12 @@ impl LanguageServer for StrivLsp {
                     ]),
                     ..Default::default()
                 }),
+                hover_provider: Some(HoverProviderCapability::Simple(true)),
+                signature_help_provider: Some(SignatureHelpOptions {
+                    trigger_characters: Some(vec!["(".to_string(), ",".to_string()]),
+                    retrigger_characters: Some(vec![",".to_string()]),
+                    ..Default::default()
+                }),
                 ..Default::default()
             },
             ..Default::default()
@@ -141,7 +147,11 @@ impl LanguageServer for StrivLsp {
         let mut items = Vec::new();
 
         // --- CASE 0: Path access (`Key::` or `Window::`) ---
-        if let Some(colon_idx) = before_cursor.rfind("::") {
+        if let Some(colon_idx) = before_cursor.rfind("::").filter(|&i| {
+            before_cursor[i + 2..]
+                .chars()
+                .all(|c| c.is_alphanumeric() || c == '_')
+        }) {
             let left = &before_cursor[..colon_idx];
             let ty_name: String = left
                 .chars()
@@ -164,11 +174,25 @@ impl LanguageServer for StrivLsp {
             }
             for (s_name, _, _, _) in lang_runtime::generated_bridge::exported_symbols() {
                 if let Some(member) = s_name.strip_prefix(&prefix) {
+                    let doc_entry = lang_runtime::generated_bridge::exported_docs()
+                        .iter()
+                        .find(|(n, _, _)| n == s_name);
                     items.push(CompletionItem {
                         label: member.to_string(),
                         kind: Some(CompletionItemKind::FUNCTION),
                         insert_text: Some(format!("{}($0)", member)),
                         insert_text_format: Some(InsertTextFormat::SNIPPET),
+                        detail: doc_entry.map(|(_, sig, _)| sig.to_string()),
+                        documentation: doc_entry.and_then(|(_, _, doc)| {
+                            if doc.is_empty() {
+                                None
+                            } else {
+                                Some(Documentation::MarkupContent(MarkupContent {
+                                    kind: MarkupKind::Markdown,
+                                    value: doc.to_string(),
+                                }))
+                            }
+                        }),
                         sort_text: Some(format!("1_{}", member)),
                         ..Default::default()
                     });
@@ -178,7 +202,11 @@ impl LanguageServer for StrivLsp {
         }
 
         // --- CASE 1: Dot access (e.g. `hero.` or `hero.he`) ---
-        if let Some(dot_idx) = before_cursor.rfind('.') {
+        if let Some(dot_idx) = before_cursor.rfind('.').filter(|&i| {
+            before_cursor[i + 1..]
+                .chars()
+                .all(|c| c.is_alphanumeric() || c == '_')
+        }) {
             let left = &before_cursor[..dot_idx];
             let var_name: String = left
                 .chars()
@@ -240,6 +268,43 @@ impl LanguageServer for StrivLsp {
                                 ..Default::default()
                             });
                         }
+                    }
+                }
+            }
+            // Also suggest methods for auto-bindgen handle types (e.g. `rng.` -> `bool()`, `f64()`)
+            if let Some((_, ty_name)) = visible.iter().find(|(n, _)| n == &var_name) {
+                let prefix = format!("{}__", ty_name);
+                for (s_name, _, _, param_count) in
+                    lang_runtime::generated_bridge::exported_symbols()
+                {
+                    if let Some(m_name) = s_name.strip_prefix(&prefix) {
+                        let snip = if *param_count <= 1 {
+                            format!("{}()", m_name)
+                        } else {
+                            format!("{}($0)", m_name)
+                        };
+                        let doc_entry = lang_runtime::generated_bridge::exported_docs()
+                            .iter()
+                            .find(|(n, _, _)| n == s_name);
+                        items.push(CompletionItem {
+                            label: m_name.to_string(),
+                            kind: Some(CompletionItemKind::METHOD),
+                            insert_text: Some(snip),
+                            insert_text_format: Some(InsertTextFormat::SNIPPET),
+                            detail: doc_entry.map(|(_, sig, _)| sig.to_string()),
+                            documentation: doc_entry.and_then(|(_, _, doc)| {
+                                if doc.is_empty() {
+                                    None
+                                } else {
+                                    Some(Documentation::MarkupContent(MarkupContent {
+                                        kind: MarkupKind::Markdown,
+                                        value: doc.to_string(),
+                                    }))
+                                }
+                            }),
+                            sort_text: Some(format!("1_{}", m_name)),
+                            ..Default::default()
+                        });
                     }
                 }
             }
@@ -386,6 +451,33 @@ impl LanguageServer for StrivLsp {
             }
         }
 
+        // Suggest auto-bindgen type names (e.g. `Rng`, `Window`, `Key`)
+        let mut seen_types = std::collections::HashSet::new();
+        for (s_name, _, _, _) in lang_runtime::generated_bridge::exported_symbols() {
+            if let Some((ty, _)) = s_name.split_once("__") {
+                if seen_types.insert(ty) {
+                    items.push(CompletionItem {
+                        label: ty.to_string(),
+                        kind: Some(CompletionItemKind::STRUCT),
+                        sort_text: Some(format!("1_{}", ty)),
+                        ..Default::default()
+                    });
+                }
+            }
+        }
+        for (c_name, _) in lang_runtime::generated_bridge::exported_constants() {
+            if let Some((ty, _)) = c_name.split_once("__") {
+                if seen_types.insert(ty) {
+                    items.push(CompletionItem {
+                        label: ty.to_string(),
+                        kind: Some(CompletionItemKind::ENUM),
+                        sort_text: Some(format!("1_{}", ty)),
+                        ..Default::default()
+                    });
+                }
+            }
+        }
+
         // Suggest local variables & parameters of the current function at the top ("0_...")
         for (var_name, var_ty) in collect_visible_vars(&lines, pos.line as usize) {
             items.push(CompletionItem {
@@ -398,6 +490,253 @@ impl LanguageServer for StrivLsp {
         }
 
         Ok(Some(CompletionResponse::Array(items)))
+    }
+
+    // 3. HOVER DOCUMENTATION
+    async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
+        let docs = self.documents.read().await;
+        let pos = params.text_document_position_params.position;
+        let Some(src) = docs.get(&params.text_document_position_params.text_document.uri) else {
+            return Ok(None);
+        };
+        let lines: Vec<&str> = src.lines().collect();
+        let line = lines.get(pos.line as usize).copied().unwrap_or("");
+        let col = (pos.character as usize).min(line.len());
+
+        let token = extract_symbol_at(line, col);
+        if token.is_empty() {
+            return Ok(None);
+        }
+
+        let lookup_key = if let Some((ty, member)) = token.split_once("::") {
+            format!("{}__{}", ty, member)
+        } else if let Some((recv, method)) = token.split_once('.') {
+            let visible = collect_visible_vars(&lines, pos.line as usize);
+            if let Some((_, ty)) = visible.iter().find(|(n, _)| n == recv) {
+                format!("{}__{}", ty, method)
+            } else {
+                token.clone()
+            }
+        } else {
+            token.clone()
+        };
+
+        if let Some((_, sig, doc)) = lang_runtime::generated_bridge::exported_docs()
+            .iter()
+            .find(|(n, _, _)| *n == lookup_key)
+        {
+            let mut md = format!("```striv\n{}\n```", sig);
+            if !doc.is_empty() {
+                md.push_str("\n---\n");
+                md.push_str(doc);
+            }
+            return Ok(Some(Hover {
+                contents: HoverContents::Markup(MarkupContent {
+                    kind: MarkupKind::Markdown,
+                    value: md,
+                }),
+                range: None,
+            }));
+        }
+
+        if let Some((c_name, val)) = lang_runtime::generated_bridge::exported_constants()
+            .iter()
+            .find(|(n, _)| *n == lookup_key)
+        {
+            let disp = c_name.replace("__", "::");
+            return Ok(Some(Hover {
+                contents: HoverContents::Markup(MarkupContent {
+                    kind: MarkupKind::Markdown,
+                    value: format!("```striv\nconst {}: int = {}\n```", disp, val),
+                }),
+                range: None,
+            }));
+        }
+
+        if let Ok(prog) = catch_unwind(AssertUnwindSafe(|| Parser::new(src).parse_program())) {
+            if let Some(func) = prog
+                .functions
+                .iter()
+                .find(|f| f.name == lookup_key || f.name == token)
+            {
+                let params_str: Vec<String> = func
+                    .params
+                    .iter()
+                    .map(|(n, ty, is_mut)| {
+                        let m = if *is_mut { "mut " } else { "" };
+                        if n == "self" {
+                            format!("{}self", m)
+                        } else {
+                            format!("{}{}: {}", m, n, ty)
+                        }
+                    })
+                    .collect();
+                let ret_str = func
+                    .ret_type
+                    .as_ref()
+                    .map(|r| format!(" -> {}", r))
+                    .unwrap_or_default();
+                return Ok(Some(Hover {
+                    contents: HoverContents::Markup(MarkupContent {
+                        kind: MarkupKind::Markdown,
+                        value: format!(
+                            "```striv\nfn {}({}){}\n```",
+                            func.name.replace("__", "."),
+                            params_str.join(", "),
+                            ret_str
+                        ),
+                    }),
+                    range: None,
+                }));
+            }
+        }
+
+        Ok(None)
+    }
+
+    // 4. SIGNATURE HELP (active parameter hint inside `(...)`)
+    async fn signature_help(&self, params: SignatureHelpParams) -> Result<Option<SignatureHelp>> {
+        let docs = self.documents.read().await;
+        let pos = params.text_document_position_params.position;
+        let Some(src) = docs.get(&params.text_document_position_params.text_document.uri) else {
+            return Ok(None);
+        };
+        let lines: Vec<&str> = src.lines().collect();
+        let line = lines.get(pos.line as usize).copied().unwrap_or("");
+        let col = (pos.character as usize).min(line.len());
+        let before = &line[..col];
+
+        // Find matching '(' before cursor and count commas at depth 0
+        let mut depth = 0i32;
+        let mut open_idx = None;
+        let mut comma_count = 0u32;
+        for (idx, ch) in before.char_indices().rev() {
+            match ch {
+                ')' => depth += 1,
+                '(' => {
+                    if depth == 0 {
+                        open_idx = Some(idx);
+                        break;
+                    }
+                    depth -= 1;
+                }
+                ',' if depth == 0 => comma_count += 1,
+                _ => {}
+            }
+        }
+
+        let Some(open) = open_idx else {
+            return Ok(None);
+        };
+        let fn_expr = before[..open]
+            .chars()
+            .rev()
+            .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == ':' || *c == '.')
+            .collect::<String>()
+            .chars()
+            .rev()
+            .collect::<String>();
+
+        let lookup_key = if let Some((ty, member)) = fn_expr.split_once("::") {
+            format!("{}__{}", ty, member)
+        } else if let Some((recv, method)) = fn_expr.split_once('.') {
+            let visible = collect_visible_vars(&lines, pos.line as usize);
+            if let Some((_, ty)) = visible.iter().find(|(n, _)| n == recv) {
+                format!("{}__{}", ty, method)
+            } else {
+                fn_expr.clone()
+            }
+        } else {
+            fn_expr.clone()
+        };
+
+        if let Some((_, sig, doc)) = lang_runtime::generated_bridge::exported_docs()
+            .iter()
+            .find(|(n, _, _)| *n == lookup_key)
+        {
+            return Ok(Some(build_signature_help(sig, doc, comma_count)));
+        }
+
+        if let Ok(prog) = catch_unwind(AssertUnwindSafe(|| Parser::new(src).parse_program())) {
+            if let Some(func) = prog
+                .functions
+                .iter()
+                .find(|f| f.name == lookup_key || f.name == fn_expr)
+            {
+                let params_str: Vec<String> = func
+                    .params
+                    .iter()
+                    .filter(|(n, _, _)| n != "self")
+                    .map(|(n, ty, is_mut)| {
+                        let m = if *is_mut { "mut " } else { "" };
+                        format!("{}{}: {}", m, n, ty)
+                    })
+                    .collect();
+                let ret_str = func
+                    .ret_type
+                    .as_ref()
+                    .map(|r| format!(" -> {}", r))
+                    .unwrap_or_default();
+                let sig = format!(
+                    "fn {}({}){}",
+                    func.name.replace("__", "."),
+                    params_str.join(", "),
+                    ret_str
+                );
+                return Ok(Some(build_signature_help(&sig, "", comma_count)));
+            }
+        }
+
+        Ok(None)
+    }
+}
+
+fn extract_symbol_at(line: &str, col: usize) -> String {
+    let bytes = line.as_bytes();
+    let is_sym = |b: u8| b.is_ascii_alphanumeric() || b == b'_' || b == b':' || b == b'.';
+    let mut start = col;
+    while start > 0 && is_sym(bytes[start - 1]) {
+        start -= 1;
+    }
+    let mut end = col;
+    while end < bytes.len() && is_sym(bytes[end]) {
+        end += 1;
+    }
+    line[start..end]
+        .trim_matches('.')
+        .trim_matches(':')
+        .to_string()
+}
+
+fn build_signature_help(sig: &str, doc: &str, active_param: u32) -> SignatureHelp {
+    let mut parameters = Vec::new();
+    if let (Some(open), Some(close)) = (sig.find('('), sig.rfind(')')) {
+        let inner = &sig[open + 1..close];
+        if !inner.trim().is_empty() {
+            for p in inner.split(',') {
+                parameters.push(ParameterInformation {
+                    label: ParameterLabel::Simple(p.trim().to_string()),
+                    documentation: None,
+                });
+            }
+        }
+    }
+    SignatureHelp {
+        signatures: vec![SignatureInformation {
+            label: sig.to_string(),
+            documentation: if doc.is_empty() {
+                None
+            } else {
+                Some(Documentation::MarkupContent(MarkupContent {
+                    kind: MarkupKind::Markdown,
+                    value: doc.to_string(),
+                }))
+            },
+            parameters: Some(parameters),
+            active_parameter: Some(active_param),
+        }],
+        active_signature: Some(0),
+        active_parameter: Some(active_param),
     }
 }
 
@@ -486,6 +825,8 @@ fn collect_visible_vars(lines: &[&str], cursor_line: usize) -> Vec<(String, Stri
                     "String".to_string()
                 } else if val.starts_with('[') {
                     "Vec".to_string()
+                } else if let Some((handle_ty, _)) = val.split_once("::") {
+                    handle_ty.trim().to_string()
                 } else if ty.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) {
                     ty.to_string()
                 } else {

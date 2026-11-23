@@ -245,7 +245,9 @@ fn format_expr(expr: &Expr) -> String {
         }
         Expr::Var(n) => n.clone(),
         Expr::FieldAccess { var, field } => format!("{}.{}", var, field),
-        Expr::Call { name, args } => format!("{}({})", name, format_args(args)),
+        Expr::Call { name, args } => {
+            format!("{}({})", name.replace("__", "::"), format_args(args))
+        }
         Expr::MethodCall {
             receiver,
             method,

@@ -698,6 +698,7 @@ dependencies = [
 name = "lang-runtime"
 version = "0.1.0"
 dependencies = [
+ "fastrand",
  "minifb",
  "slotmap",
  "tiny_http",

@@ -2,10 +2,26 @@
   "scopeName": "source.striv",
   "patterns": [
     { "match": "//.*$", "name": "comment.line.double-slash" },
-    { "match": "\\b(fn|let|mut|if|else|while|return|struct|impl|print|tweak|const|concurrent)\\b", "name": "keyword.control" },
+    {
+      "begin": "\"",
+      "end": "\"",
+      "name": "string.quoted.double.striv",
+      "patterns": [
+        { "match": "\\\\.", "name": "constant.character.escape.striv" },
+        {
+          "begin": "\\{",
+          "end": "\\}",
+          "name": "meta.embedded.expression.striv",
+          "contentName": "source.striv"
+        }
+      ]
+    },
+    { "match": "\\b(fn|let|mut|if|else|while|for|in|return|struct|impl|print|tweak|const|concurrent)\\b", "name": "keyword.control" },
     { "match": "\\b(int|float|bool|String|Vec)\\b", "name": "storage.type" },
     { "match": "\\b[A-Z][a-zA-Z0-9_]*\\b", "name": "entity.name.type" },
     { "match": "\\b[a-z_][a-zA-Z0-9_]*(?=\\s*\\()", "name": "entity.name.function" },
+    { "match": "\\b0x[0-9a-fA-F]+\\b", "name": "constant.numeric.hex" },
+    { "match": "\\b[0-9]+\\.[0-9]+\\b", "name": "constant.numeric.float" },
     { "match": "\\b[0-9]+\\b", "name": "constant.numeric" }
   ]
 }

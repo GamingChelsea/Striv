@@ -1,50 +1,48 @@
-tweak move_speed = 6
-tweak jump_power = 15
-tweak size = 50
-
-struct Game {
-    x: float,
-    y: float,
-    vel_y: float,
-}
-
-impl Game {
-    fn apply_gravity(mut self) -> int {
-        self.vel_y += 0.65
-        self.y += self.vel_y
-        let floor = 550 - size
-        if self.y > floor {
-            self.y = floor
-            self.vel_y = 0.0
+fn fill_rect(mut buf: Vec, x0: int, y0: int, w: int, h: int, color: int) {
+    for y in y0..y0 + h {
+        if y > 0 {
+            if y < 600 {
+                for x in x0..x0 + w {
+                    if x > 0 {
+                        if x < 800 {
+                            buf[y * 800 + x] = color
+                        }
+                    }
+                }
+            }
         }
-        return 0
-    }
-
-    fn draw(self, win: int) -> int {
-        clear(win, 1974826)
-        for i in 0..10 {
-            draw_rect(win, i * 80, 550, 75, 20, 4080721)
-        }
-        draw_rect(win, self.x, self.y, size, size, 14707829)
-        return 0
     }
 }
 
-fn update(mut g: Game, win: int) -> int {
-    g.apply_gravity()
-    if key_down(win, 1) == 1 {
-        g.x -= move_speed
+fn main() -> int {
+    let opts = WindowOptions::default()
+    let mut win = Window::new("100% Auto Bindgen Striv!", 800, 600, opts)
+    let mut buf = []
+    for i in 0..480000 {
+        buf.push(0x1E222A)
     }
-    if key_down(win, 2) == 1 {
-        g.x += move_speed
-    }
-    if key_down(win, 5) == 1 {
-        let floor = 550 - size
-        if g.y == floor {
-            g.vel_y = 0 - jump_power
-            print("Sprung bei X = {g.x}!")
+    let mut px = 375
+    let mut py = 275
+    let color = 0x61AFEF
+    while win.is_open() {
+        if win.is_key_down(Key::Escape) {
+            return 0
         }
+        if win.is_key_down(Key::Left) {
+            px -= 8
+        }
+        if win.is_key_down(Key::Right) {
+            px += 8
+        }
+        if win.is_key_down(Key::Up) {
+            py -= 8
+        }
+        if win.is_key_down(Key::Down) {
+            py += 8
+        }
+        fill_rect(buf, 0, 0, 800, 600, 0x1E222A)
+        fill_rect(buf, px, py, 50, 50, color)
+        win.update_with_buffer(buf, 800, 600)
     }
-    g.draw(win)
     return 0
 }

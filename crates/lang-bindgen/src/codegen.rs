@@ -18,6 +18,7 @@ pub fn emit_crate_bridge(apis: &[CrateApi]) -> (String, SyncSummary) {
 
     let mut symbols: Vec<(String, String, usize)> = Vec::new();
     let mut constants: Vec<(String, i64)> = Vec::new();
+    let mut docs: Vec<(String, String, String)> = Vec::new();
     let mut struct_count = 0;
     let mut enum_count = 0;
 
@@ -98,7 +99,25 @@ pub fn emit_crate_bridge(apis: &[CrateApi]) -> (String, SyncSummary) {
             }
 
             let param_count = c_params.len();
-            symbols.push((striv_name, c_sym.clone(), param_count));
+            symbols.push((striv_name.clone(), c_sym.clone(), param_count));
+
+            let params_disp: Vec<String> = m
+                .arg_metas
+                .iter()
+                .map(|(n, ty)| format!("{}: {}", n, ty))
+                .collect();
+            let disp_name = match &m.struct_name {
+                Some(s) if m.receiver.is_some() => format!("{}.{}", s, m.name),
+                Some(s) => format!("{}::{}", s, m.name),
+                None => m.name.clone(),
+            };
+            let ret_disp = if m.ret_str.is_empty() {
+                String::new()
+            } else {
+                format!(" -> {}", m.ret_str)
+            };
+            let sig_str = format!("fn {}({}){}", disp_name, params_disp.join(", "), ret_disp);
+            docs.push((striv_name, sig_str, m.doc.clone()));
 
             out.push_str(&format!(
                 "#[unsafe(no_mangle)]\npub extern \"C\" fn {}({}) -> i64 {{\n",
@@ -213,6 +232,12 @@ pub fn emit_crate_bridge(apis: &[CrateApi]) -> (String, SyncSummary) {
     out.push_str("pub fn exported_constants() -> &'static [(&'static str, i64)] {\n    &[\n");
     for (c_name, val) in &constants {
         out.push_str(&format!("        (\"{}\", {}),\n", c_name, val));
+    }
+    out.push_str("    ]\n}\n\n");
+
+    out.push_str("pub fn exported_docs() -> &'static [(&'static str, &'static str, &'static str)] {\n    &[\n");
+    for (name, sig, doc) in &docs {
+        out.push_str(&format!("        ({:?}, {:?}, {:?}),\n", name, sig, doc));
     }
     out.push_str("    ]\n}\n");
 

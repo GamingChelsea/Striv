@@ -93,264 +93,230 @@ fn auto_enum_minifb_scalemode(v: i64) -> minifb::ScaleMode {
     }
 }
 
+#[allow(dead_code)]
+fn auto_enum_minifb_key(v: i64) -> minifb::Key {
+    match v {
+        0 => minifb::Key::Key0,
+        1 => minifb::Key::Key1,
+        2 => minifb::Key::Key2,
+        3 => minifb::Key::Key3,
+        4 => minifb::Key::Key4,
+        5 => minifb::Key::Key5,
+        6 => minifb::Key::Key6,
+        7 => minifb::Key::Key7,
+        8 => minifb::Key::Key8,
+        9 => minifb::Key::Key9,
+        10 => minifb::Key::A,
+        11 => minifb::Key::B,
+        12 => minifb::Key::C,
+        13 => minifb::Key::D,
+        14 => minifb::Key::E,
+        15 => minifb::Key::F,
+        16 => minifb::Key::G,
+        17 => minifb::Key::H,
+        18 => minifb::Key::I,
+        19 => minifb::Key::J,
+        20 => minifb::Key::K,
+        21 => minifb::Key::L,
+        22 => minifb::Key::M,
+        23 => minifb::Key::N,
+        24 => minifb::Key::O,
+        25 => minifb::Key::P,
+        26 => minifb::Key::Q,
+        27 => minifb::Key::R,
+        28 => minifb::Key::S,
+        29 => minifb::Key::T,
+        30 => minifb::Key::U,
+        31 => minifb::Key::V,
+        32 => minifb::Key::W,
+        33 => minifb::Key::X,
+        34 => minifb::Key::Y,
+        35 => minifb::Key::Z,
+        36 => minifb::Key::F1,
+        37 => minifb::Key::F2,
+        38 => minifb::Key::F3,
+        39 => minifb::Key::F4,
+        40 => minifb::Key::F5,
+        41 => minifb::Key::F6,
+        42 => minifb::Key::F7,
+        43 => minifb::Key::F8,
+        44 => minifb::Key::F9,
+        45 => minifb::Key::F10,
+        46 => minifb::Key::F11,
+        47 => minifb::Key::F12,
+        48 => minifb::Key::F13,
+        49 => minifb::Key::F14,
+        50 => minifb::Key::F15,
+        51 => minifb::Key::Down,
+        52 => minifb::Key::Left,
+        53 => minifb::Key::Right,
+        54 => minifb::Key::Up,
+        55 => minifb::Key::Apostrophe,
+        56 => minifb::Key::Backquote,
+        57 => minifb::Key::Backslash,
+        58 => minifb::Key::Comma,
+        59 => minifb::Key::Equal,
+        60 => minifb::Key::LeftBracket,
+        61 => minifb::Key::Minus,
+        62 => minifb::Key::Period,
+        63 => minifb::Key::RightBracket,
+        64 => minifb::Key::Semicolon,
+        65 => minifb::Key::Slash,
+        66 => minifb::Key::Backspace,
+        67 => minifb::Key::Delete,
+        68 => minifb::Key::End,
+        69 => minifb::Key::Enter,
+        70 => minifb::Key::Escape,
+        71 => minifb::Key::Home,
+        72 => minifb::Key::Insert,
+        73 => minifb::Key::Menu,
+        74 => minifb::Key::PageDown,
+        75 => minifb::Key::PageUp,
+        76 => minifb::Key::Pause,
+        77 => minifb::Key::Space,
+        78 => minifb::Key::Tab,
+        79 => minifb::Key::NumLock,
+        80 => minifb::Key::CapsLock,
+        81 => minifb::Key::ScrollLock,
+        82 => minifb::Key::LeftShift,
+        83 => minifb::Key::RightShift,
+        84 => minifb::Key::LeftCtrl,
+        85 => minifb::Key::RightCtrl,
+        86 => minifb::Key::NumPad0,
+        87 => minifb::Key::NumPad1,
+        88 => minifb::Key::NumPad2,
+        89 => minifb::Key::NumPad3,
+        90 => minifb::Key::NumPad4,
+        91 => minifb::Key::NumPad5,
+        92 => minifb::Key::NumPad6,
+        93 => minifb::Key::NumPad7,
+        94 => minifb::Key::NumPad8,
+        95 => minifb::Key::NumPad9,
+        96 => minifb::Key::NumPadDot,
+        97 => minifb::Key::NumPadSlash,
+        98 => minifb::Key::NumPadAsterisk,
+        99 => minifb::Key::NumPadMinus,
+        100 => minifb::Key::NumPadPlus,
+        101 => minifb::Key::NumPadEnter,
+        102 => minifb::Key::LeftAlt,
+        103 => minifb::Key::RightAlt,
+        104 => minifb::Key::LeftSuper,
+        105 => minifb::Key::RightSuper,
+        106 => minifb::Key::Unknown,
+        107 => minifb::Key::Count,
+        _ => minifb::Key::Key0,
+    }
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn striv_auto_minifb_window_new(arg0: i64, arg1: i64, arg2: i64, arg3: i64) -> i64 {
     let s_arg0 = unsafe { &*(arg0 as *const String) };
-    let h_arg3 = VAULT_MINIFB_WINDOWOPTIONS.with(|v| {
-        v.borrow_mut()
-            .remove(AutoKey_minifb_WindowOptions::from(KeyData::from_ffi(
-                arg3 as u64,
-            )))
-            .expect("Invalid handle")
-    });
-    let res = (minifb::Window::new(s_arg0.as_str(), arg1 as usize, arg2 as usize, h_arg3))
-        .expect("Rust call returned Err");
+    let h_arg3 = VAULT_MINIFB_WINDOWOPTIONS.with(|v| v.borrow_mut().remove(AutoKey_minifb_WindowOptions::from(KeyData::from_ffi(arg3 as u64))).expect("Invalid handle"));
+    let res = (minifb::Window::new(s_arg0.as_str(), arg1 as usize, arg2 as usize, h_arg3)).expect("Rust call returned Err");
     VAULT_MINIFB_WINDOW.with(|v| v.borrow_mut().insert(res).data().as_ffi() as i64)
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn striv_auto_minifb_window_set_title(self_h: i64, arg0: i64) -> i64 {
     let s_arg0 = unsafe { &*(arg0 as *const String) };
-    VAULT_MINIFB_WINDOW.with(|v| {
-        let mut map = v.borrow_mut();
-        let obj = map
-            .get_mut(AutoKey_minifb_Window::from(KeyData::from_ffi(
-                self_h as u64,
-            )))
-            .expect("Invalid handle");
-        obj.set_title(s_arg0.as_str())
-    });
+    VAULT_MINIFB_WINDOW.with(|v| { let mut map = v.borrow_mut(); let obj = map.get_mut(AutoKey_minifb_Window::from(KeyData::from_ffi(self_h as u64))).expect("Invalid handle"); obj.set_title(s_arg0.as_str()) });
     0
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn striv_auto_minifb_window_update_with_buffer(
-    self_h: i64,
-    arg0: i64,
-    arg1: i64,
-    arg2: i64,
-) -> i64 {
-    let v_arg0: Vec<u32> = unsafe { &*(arg0 as *const Vec<i64>) }
-        .iter()
-        .map(|&x| x as u32)
-        .collect();
-    if (VAULT_MINIFB_WINDOW.with(|v| {
-        let mut map = v.borrow_mut();
-        let obj = map
-            .get_mut(AutoKey_minifb_Window::from(KeyData::from_ffi(
-                self_h as u64,
-            )))
-            .expect("Invalid handle");
-        obj.update_with_buffer(&v_arg0, arg1 as usize, arg2 as usize)
-    }))
-    .is_ok()
-    {
-        1
-    } else {
-        0
-    }
+pub extern "C" fn striv_auto_minifb_window_update_with_buffer(self_h: i64, arg0: i64, arg1: i64, arg2: i64) -> i64 {
+    let v_arg0: Vec<u32> = unsafe { &*(arg0 as *const Vec<i64>) }.iter().map(|&x| x as u32).collect();
+    if (VAULT_MINIFB_WINDOW.with(|v| { let mut map = v.borrow_mut(); let obj = map.get_mut(AutoKey_minifb_Window::from(KeyData::from_ffi(self_h as u64))).expect("Invalid handle"); obj.update_with_buffer(&v_arg0, arg1 as usize, arg2 as usize) })).is_ok() { 1 } else { 0 }
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn striv_auto_minifb_window_update(self_h: i64) -> i64 {
-    VAULT_MINIFB_WINDOW.with(|v| {
-        let mut map = v.borrow_mut();
-        let obj = map
-            .get_mut(AutoKey_minifb_Window::from(KeyData::from_ffi(
-                self_h as u64,
-            )))
-            .expect("Invalid handle");
-        obj.update()
-    });
+    VAULT_MINIFB_WINDOW.with(|v| { let mut map = v.borrow_mut(); let obj = map.get_mut(AutoKey_minifb_Window::from(KeyData::from_ffi(self_h as u64))).expect("Invalid handle"); obj.update() });
     0
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn striv_auto_minifb_window_is_open(self_h: i64) -> i64 {
-    if VAULT_MINIFB_WINDOW.with(|v| {
-        let mut map = v.borrow();
-        let obj = map
-            .get(AutoKey_minifb_Window::from(KeyData::from_ffi(
-                self_h as u64,
-            )))
-            .expect("Invalid handle");
-        obj.is_open()
-    }) {
-        1
-    } else {
-        0
-    }
+    if VAULT_MINIFB_WINDOW.with(|v| { let mut map = v.borrow(); let obj = map.get(AutoKey_minifb_Window::from(KeyData::from_ffi(self_h as u64))).expect("Invalid handle"); obj.is_open() }) { 1 } else { 0 }
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn striv_auto_minifb_window_set_position(self_h: i64, arg0: i64, arg1: i64) -> i64 {
-    VAULT_MINIFB_WINDOW.with(|v| {
-        let mut map = v.borrow_mut();
-        let obj = map
-            .get_mut(AutoKey_minifb_Window::from(KeyData::from_ffi(
-                self_h as u64,
-            )))
-            .expect("Invalid handle");
-        obj.set_position(arg0 as isize, arg1 as isize)
-    });
+    VAULT_MINIFB_WINDOW.with(|v| { let mut map = v.borrow_mut(); let obj = map.get_mut(AutoKey_minifb_Window::from(KeyData::from_ffi(self_h as u64))).expect("Invalid handle"); obj.set_position(arg0 as isize, arg1 as isize) });
     0
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn striv_auto_minifb_window_topmost(self_h: i64, arg0: i64) -> i64 {
-    VAULT_MINIFB_WINDOW.with(|v| {
-        let mut map = v.borrow();
-        let obj = map
-            .get(AutoKey_minifb_Window::from(KeyData::from_ffi(
-                self_h as u64,
-            )))
-            .expect("Invalid handle");
-        obj.topmost(arg0 != 0)
-    });
+    VAULT_MINIFB_WINDOW.with(|v| { let mut map = v.borrow(); let obj = map.get(AutoKey_minifb_Window::from(KeyData::from_ffi(self_h as u64))).expect("Invalid handle"); obj.topmost(arg0 != 0) });
     0
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn striv_auto_minifb_window_set_background_color(
-    self_h: i64,
-    arg0: i64,
-    arg1: i64,
-    arg2: i64,
-) -> i64 {
-    VAULT_MINIFB_WINDOW.with(|v| {
-        let mut map = v.borrow_mut();
-        let obj = map
-            .get_mut(AutoKey_minifb_Window::from(KeyData::from_ffi(
-                self_h as u64,
-            )))
-            .expect("Invalid handle");
-        obj.set_background_color(arg0 as u8, arg1 as u8, arg2 as u8)
-    });
+pub extern "C" fn striv_auto_minifb_window_set_background_color(self_h: i64, arg0: i64, arg1: i64, arg2: i64) -> i64 {
+    VAULT_MINIFB_WINDOW.with(|v| { let mut map = v.borrow_mut(); let obj = map.get_mut(AutoKey_minifb_Window::from(KeyData::from_ffi(self_h as u64))).expect("Invalid handle"); obj.set_background_color(arg0 as u8, arg1 as u8, arg2 as u8) });
     0
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn striv_auto_minifb_window_set_cursor_visibility(self_h: i64, arg0: i64) -> i64 {
-    VAULT_MINIFB_WINDOW.with(|v| {
-        let mut map = v.borrow_mut();
-        let obj = map
-            .get_mut(AutoKey_minifb_Window::from(KeyData::from_ffi(
-                self_h as u64,
-            )))
-            .expect("Invalid handle");
-        obj.set_cursor_visibility(arg0 != 0)
-    });
+    VAULT_MINIFB_WINDOW.with(|v| { let mut map = v.borrow_mut(); let obj = map.get_mut(AutoKey_minifb_Window::from(KeyData::from_ffi(self_h as u64))).expect("Invalid handle"); obj.set_cursor_visibility(arg0 != 0) });
     0
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn striv_auto_minifb_window_set_target_fps(self_h: i64, arg0: i64) -> i64 {
-    VAULT_MINIFB_WINDOW.with(|v| {
-        let mut map = v.borrow_mut();
-        let obj = map
-            .get_mut(AutoKey_minifb_Window::from(KeyData::from_ffi(
-                self_h as u64,
-            )))
-            .expect("Invalid handle");
-        obj.set_target_fps(arg0 as usize)
-    });
+    VAULT_MINIFB_WINDOW.with(|v| { let mut map = v.borrow_mut(); let obj = map.get_mut(AutoKey_minifb_Window::from(KeyData::from_ffi(self_h as u64))).expect("Invalid handle"); obj.set_target_fps(arg0 as usize) });
     0
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn striv_auto_minifb_window_get_mouse_down(self_h: i64, arg0: i64) -> i64 {
-    if VAULT_MINIFB_WINDOW.with(|v| {
-        let mut map = v.borrow();
-        let obj = map
-            .get(AutoKey_minifb_Window::from(KeyData::from_ffi(
-                self_h as u64,
-            )))
-            .expect("Invalid handle");
-        obj.get_mouse_down(auto_enum_minifb_mousebutton(arg0))
-    }) {
-        1
-    } else {
-        0
-    }
+    if VAULT_MINIFB_WINDOW.with(|v| { let mut map = v.borrow(); let obj = map.get(AutoKey_minifb_Window::from(KeyData::from_ffi(self_h as u64))).expect("Invalid handle"); obj.get_mouse_down(auto_enum_minifb_mousebutton(arg0)) }) { 1 } else { 0 }
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn striv_auto_minifb_window_set_cursor_style(self_h: i64, arg0: i64) -> i64 {
-    VAULT_MINIFB_WINDOW.with(|v| {
-        let mut map = v.borrow_mut();
-        let obj = map
-            .get_mut(AutoKey_minifb_Window::from(KeyData::from_ffi(
-                self_h as u64,
-            )))
-            .expect("Invalid handle");
-        obj.set_cursor_style(auto_enum_minifb_cursorstyle(arg0))
-    });
+    VAULT_MINIFB_WINDOW.with(|v| { let mut map = v.borrow_mut(); let obj = map.get_mut(AutoKey_minifb_Window::from(KeyData::from_ffi(self_h as u64))).expect("Invalid handle"); obj.set_cursor_style(auto_enum_minifb_cursorstyle(arg0)) });
     0
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn striv_auto_minifb_window_is_key_down(self_h: i64, arg0: i64) -> i64 {
+    if VAULT_MINIFB_WINDOW.with(|v| { let mut map = v.borrow(); let obj = map.get(AutoKey_minifb_Window::from(KeyData::from_ffi(self_h as u64))).expect("Invalid handle"); obj.is_key_down(auto_enum_minifb_key(arg0)) }) { 1 } else { 0 }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_auto_minifb_window_is_key_pressed(self_h: i64, arg0: i64, arg1: i64) -> i64 {
+    if VAULT_MINIFB_WINDOW.with(|v| { let mut map = v.borrow(); let obj = map.get(AutoKey_minifb_Window::from(KeyData::from_ffi(self_h as u64))).expect("Invalid handle"); obj.is_key_pressed(auto_enum_minifb_key(arg0), auto_enum_minifb_keyrepeat(arg1)) }) { 1 } else { 0 }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_auto_minifb_window_is_key_released(self_h: i64, arg0: i64) -> i64 {
+    if VAULT_MINIFB_WINDOW.with(|v| { let mut map = v.borrow(); let obj = map.get(AutoKey_minifb_Window::from(KeyData::from_ffi(self_h as u64))).expect("Invalid handle"); obj.is_key_released(auto_enum_minifb_key(arg0)) }) { 1 } else { 0 }
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn striv_auto_minifb_window_set_key_repeat_delay(self_h: i64, arg0: i64) -> i64 {
-    VAULT_MINIFB_WINDOW.with(|v| {
-        let mut map = v.borrow_mut();
-        let obj = map
-            .get_mut(AutoKey_minifb_Window::from(KeyData::from_ffi(
-                self_h as u64,
-            )))
-            .expect("Invalid handle");
-        obj.set_key_repeat_delay(f64::from_bits(arg0 as u64) as f32)
-    });
+    VAULT_MINIFB_WINDOW.with(|v| { let mut map = v.borrow_mut(); let obj = map.get_mut(AutoKey_minifb_Window::from(KeyData::from_ffi(self_h as u64))).expect("Invalid handle"); obj.set_key_repeat_delay(f64::from_bits(arg0 as u64) as f32) });
     0
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn striv_auto_minifb_window_set_key_repeat_rate(self_h: i64, arg0: i64) -> i64 {
-    VAULT_MINIFB_WINDOW.with(|v| {
-        let mut map = v.borrow_mut();
-        let obj = map
-            .get_mut(AutoKey_minifb_Window::from(KeyData::from_ffi(
-                self_h as u64,
-            )))
-            .expect("Invalid handle");
-        obj.set_key_repeat_rate(f64::from_bits(arg0 as u64) as f32)
-    });
+    VAULT_MINIFB_WINDOW.with(|v| { let mut map = v.borrow_mut(); let obj = map.get_mut(AutoKey_minifb_Window::from(KeyData::from_ffi(self_h as u64))).expect("Invalid handle"); obj.set_key_repeat_rate(f64::from_bits(arg0 as u64) as f32) });
     0
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn striv_auto_minifb_window_is_active(self_h: i64) -> i64 {
-    if VAULT_MINIFB_WINDOW.with(|v| {
-        let mut map = v.borrow_mut();
-        let obj = map
-            .get_mut(AutoKey_minifb_Window::from(KeyData::from_ffi(
-                self_h as u64,
-            )))
-            .expect("Invalid handle");
-        obj.is_active()
-    }) {
-        1
-    } else {
-        0
-    }
+    if VAULT_MINIFB_WINDOW.with(|v| { let mut map = v.borrow_mut(); let obj = map.get_mut(AutoKey_minifb_Window::from(KeyData::from_ffi(self_h as u64))).expect("Invalid handle"); obj.is_active() }) { 1 } else { 0 }
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn striv_auto_minifb_window_remove_menu(self_h: i64, arg0: i64) -> i64 {
-    let h_arg0 = VAULT_MINIFB_MENUHANDLE.with(|v| {
-        v.borrow_mut()
-            .remove(AutoKey_minifb_MenuHandle::from(KeyData::from_ffi(
-                arg0 as u64,
-            )))
-            .expect("Invalid handle")
-    });
-    VAULT_MINIFB_WINDOW.with(|v| {
-        let mut map = v.borrow_mut();
-        let obj = map
-            .get_mut(AutoKey_minifb_Window::from(KeyData::from_ffi(
-                self_h as u64,
-            )))
-            .expect("Invalid handle");
-        obj.remove_menu(h_arg0)
-    });
+    let h_arg0 = VAULT_MINIFB_MENUHANDLE.with(|v| v.borrow_mut().remove(AutoKey_minifb_MenuHandle::from(KeyData::from_ffi(arg0 as u64))).expect("Invalid handle"));
+    VAULT_MINIFB_WINDOW.with(|v| { let mut map = v.borrow_mut(); let obj = map.get_mut(AutoKey_minifb_Window::from(KeyData::from_ffi(self_h as u64))).expect("Invalid handle"); obj.remove_menu(h_arg0) });
     0
 }
 
@@ -363,144 +329,152 @@ pub extern "C" fn striv_auto_minifb_menu_new(arg0: i64) -> i64 {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn striv_auto_minifb_menu_destroy_menu(self_h: i64) -> i64 {
-    VAULT_MINIFB_MENU.with(|v| {
-        let mut map = v.borrow_mut();
-        let obj = map
-            .get_mut(AutoKey_minifb_Menu::from(KeyData::from_ffi(self_h as u64)))
-            .expect("Invalid handle");
-        obj.destroy_menu()
-    });
+    VAULT_MINIFB_MENU.with(|v| { let mut map = v.borrow_mut(); let obj = map.get_mut(AutoKey_minifb_Menu::from(KeyData::from_ffi(self_h as u64))).expect("Invalid handle"); obj.destroy_menu() });
     0
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn striv_auto_minifb_menu_add_separator(self_h: i64) -> i64 {
-    VAULT_MINIFB_MENU.with(|v| {
-        let mut map = v.borrow_mut();
-        let obj = map
-            .get_mut(AutoKey_minifb_Menu::from(KeyData::from_ffi(self_h as u64)))
-            .expect("Invalid handle");
-        obj.add_separator()
-    });
+    VAULT_MINIFB_MENU.with(|v| { let mut map = v.borrow_mut(); let obj = map.get_mut(AutoKey_minifb_Menu::from(KeyData::from_ffi(self_h as u64))).expect("Invalid handle"); obj.add_separator() });
     0
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_auto_minifb_windowoptions_default() -> i64 {
+    let res = minifb::WindowOptions::default();
+    VAULT_MINIFB_WINDOWOPTIONS.with(|v| v.borrow_mut().insert(res).data().as_ffi() as i64)
+}
+
+new_key_type! { pub struct AutoKey_fastrand_Rng; }
+thread_local! {
+static VAULT_FASTRAND_RNG: RefCell<SlotMap<AutoKey_fastrand_Rng, fastrand::Rng>> = RefCell::new(SlotMap::with_key());
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_auto_fastrand_rng_with_seed(arg0: i64) -> i64 {
+    let res = fastrand::Rng::with_seed(arg0 as u64);
+    VAULT_FASTRAND_RNG.with(|v| v.borrow_mut().insert(res).data().as_ffi() as i64)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_auto_fastrand_rng_fork(self_h: i64) -> i64 {
+    let res = VAULT_FASTRAND_RNG.with(|v| { let mut map = v.borrow_mut(); let obj = map.get_mut(AutoKey_fastrand_Rng::from(KeyData::from_ffi(self_h as u64))).expect("Invalid handle"); obj.fork() });
+    VAULT_FASTRAND_RNG.with(|v| v.borrow_mut().insert(res).data().as_ffi() as i64)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_auto_fastrand_rng_bool(self_h: i64) -> i64 {
+    if VAULT_FASTRAND_RNG.with(|v| { let mut map = v.borrow_mut(); let obj = map.get_mut(AutoKey_fastrand_Rng::from(KeyData::from_ffi(self_h as u64))).expect("Invalid handle"); obj.bool() }) { 1 } else { 0 }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_auto_fastrand_rng_f32_inclusive(self_h: i64) -> i64 {
+    ((VAULT_FASTRAND_RNG.with(|v| { let mut map = v.borrow_mut(); let obj = map.get_mut(AutoKey_fastrand_Rng::from(KeyData::from_ffi(self_h as u64))).expect("Invalid handle"); obj.f32_inclusive() })) as f64).to_bits() as i64
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_auto_fastrand_rng_f32(self_h: i64) -> i64 {
+    ((VAULT_FASTRAND_RNG.with(|v| { let mut map = v.borrow_mut(); let obj = map.get_mut(AutoKey_fastrand_Rng::from(KeyData::from_ffi(self_h as u64))).expect("Invalid handle"); obj.f32() })) as f64).to_bits() as i64
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_auto_fastrand_rng_f64_inclusive(self_h: i64) -> i64 {
+    ((VAULT_FASTRAND_RNG.with(|v| { let mut map = v.borrow_mut(); let obj = map.get_mut(AutoKey_fastrand_Rng::from(KeyData::from_ffi(self_h as u64))).expect("Invalid handle"); obj.f64_inclusive() })) as f64).to_bits() as i64
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_auto_fastrand_rng_f64(self_h: i64) -> i64 {
+    ((VAULT_FASTRAND_RNG.with(|v| { let mut map = v.borrow_mut(); let obj = map.get_mut(AutoKey_fastrand_Rng::from(KeyData::from_ffi(self_h as u64))).expect("Invalid handle"); obj.f64() })) as f64).to_bits() as i64
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_auto_fastrand_rng_seed(self_h: i64, arg0: i64) -> i64 {
+    VAULT_FASTRAND_RNG.with(|v| { let mut map = v.borrow_mut(); let obj = map.get_mut(AutoKey_fastrand_Rng::from(KeyData::from_ffi(self_h as u64))).expect("Invalid handle"); obj.seed(arg0 as u64) });
+    0
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_auto_fastrand_rng_get_seed(self_h: i64) -> i64 {
+    (VAULT_FASTRAND_RNG.with(|v| { let mut map = v.borrow(); let obj = map.get(AutoKey_fastrand_Rng::from(KeyData::from_ffi(self_h as u64))).expect("Invalid handle"); obj.get_seed() })) as i64
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_auto_fastrand_seed(arg0: i64) -> i64 {
+    fastrand::seed(arg0 as u64);
+    0
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_auto_fastrand_get_seed() -> i64 {
+    (fastrand::get_seed()) as i64
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_auto_fastrand_bool() -> i64 {
+    if fastrand::bool() { 1 } else { 0 }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_auto_fastrand_f32() -> i64 {
+    ((fastrand::f32()) as f64).to_bits() as i64
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_auto_fastrand_f32_inclusive() -> i64 {
+    ((fastrand::f32_inclusive()) as f64).to_bits() as i64
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_auto_fastrand_f64() -> i64 {
+    ((fastrand::f64()) as f64).to_bits() as i64
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_auto_fastrand_f64_inclusive() -> i64 {
+    ((fastrand::f64_inclusive()) as f64).to_bits() as i64
 }
 
 pub fn exported_symbols() -> &'static [(&'static str, &'static str, *const u8, usize)] {
     &[
-        (
-            "Window__new",
-            "striv_auto_minifb_window_new",
-            striv_auto_minifb_window_new as *const u8,
-            4,
-        ),
-        (
-            "Window__set_title",
-            "striv_auto_minifb_window_set_title",
-            striv_auto_minifb_window_set_title as *const u8,
-            2,
-        ),
-        (
-            "Window__update_with_buffer",
-            "striv_auto_minifb_window_update_with_buffer",
-            striv_auto_minifb_window_update_with_buffer as *const u8,
-            4,
-        ),
-        (
-            "Window__update",
-            "striv_auto_minifb_window_update",
-            striv_auto_minifb_window_update as *const u8,
-            1,
-        ),
-        (
-            "Window__is_open",
-            "striv_auto_minifb_window_is_open",
-            striv_auto_minifb_window_is_open as *const u8,
-            1,
-        ),
-        (
-            "Window__set_position",
-            "striv_auto_minifb_window_set_position",
-            striv_auto_minifb_window_set_position as *const u8,
-            3,
-        ),
-        (
-            "Window__topmost",
-            "striv_auto_minifb_window_topmost",
-            striv_auto_minifb_window_topmost as *const u8,
-            2,
-        ),
-        (
-            "Window__set_background_color",
-            "striv_auto_minifb_window_set_background_color",
-            striv_auto_minifb_window_set_background_color as *const u8,
-            4,
-        ),
-        (
-            "Window__set_cursor_visibility",
-            "striv_auto_minifb_window_set_cursor_visibility",
-            striv_auto_minifb_window_set_cursor_visibility as *const u8,
-            2,
-        ),
-        (
-            "Window__set_target_fps",
-            "striv_auto_minifb_window_set_target_fps",
-            striv_auto_minifb_window_set_target_fps as *const u8,
-            2,
-        ),
-        (
-            "Window__get_mouse_down",
-            "striv_auto_minifb_window_get_mouse_down",
-            striv_auto_minifb_window_get_mouse_down as *const u8,
-            2,
-        ),
-        (
-            "Window__set_cursor_style",
-            "striv_auto_minifb_window_set_cursor_style",
-            striv_auto_minifb_window_set_cursor_style as *const u8,
-            2,
-        ),
-        (
-            "Window__set_key_repeat_delay",
-            "striv_auto_minifb_window_set_key_repeat_delay",
-            striv_auto_minifb_window_set_key_repeat_delay as *const u8,
-            2,
-        ),
-        (
-            "Window__set_key_repeat_rate",
-            "striv_auto_minifb_window_set_key_repeat_rate",
-            striv_auto_minifb_window_set_key_repeat_rate as *const u8,
-            2,
-        ),
-        (
-            "Window__is_active",
-            "striv_auto_minifb_window_is_active",
-            striv_auto_minifb_window_is_active as *const u8,
-            1,
-        ),
-        (
-            "Window__remove_menu",
-            "striv_auto_minifb_window_remove_menu",
-            striv_auto_minifb_window_remove_menu as *const u8,
-            2,
-        ),
-        (
-            "Menu__new",
-            "striv_auto_minifb_menu_new",
-            striv_auto_minifb_menu_new as *const u8,
-            1,
-        ),
-        (
-            "Menu__destroy_menu",
-            "striv_auto_minifb_menu_destroy_menu",
-            striv_auto_minifb_menu_destroy_menu as *const u8,
-            1,
-        ),
-        (
-            "Menu__add_separator",
-            "striv_auto_minifb_menu_add_separator",
-            striv_auto_minifb_menu_add_separator as *const u8,
-            1,
-        ),
+        ("Window__new", "striv_auto_minifb_window_new", striv_auto_minifb_window_new as *const u8, 4),
+        ("Window__set_title", "striv_auto_minifb_window_set_title", striv_auto_minifb_window_set_title as *const u8, 2),
+        ("Window__update_with_buffer", "striv_auto_minifb_window_update_with_buffer", striv_auto_minifb_window_update_with_buffer as *const u8, 4),
+        ("Window__update", "striv_auto_minifb_window_update", striv_auto_minifb_window_update as *const u8, 1),
+        ("Window__is_open", "striv_auto_minifb_window_is_open", striv_auto_minifb_window_is_open as *const u8, 1),
+        ("Window__set_position", "striv_auto_minifb_window_set_position", striv_auto_minifb_window_set_position as *const u8, 3),
+        ("Window__topmost", "striv_auto_minifb_window_topmost", striv_auto_minifb_window_topmost as *const u8, 2),
+        ("Window__set_background_color", "striv_auto_minifb_window_set_background_color", striv_auto_minifb_window_set_background_color as *const u8, 4),
+        ("Window__set_cursor_visibility", "striv_auto_minifb_window_set_cursor_visibility", striv_auto_minifb_window_set_cursor_visibility as *const u8, 2),
+        ("Window__set_target_fps", "striv_auto_minifb_window_set_target_fps", striv_auto_minifb_window_set_target_fps as *const u8, 2),
+        ("Window__get_mouse_down", "striv_auto_minifb_window_get_mouse_down", striv_auto_minifb_window_get_mouse_down as *const u8, 2),
+        ("Window__set_cursor_style", "striv_auto_minifb_window_set_cursor_style", striv_auto_minifb_window_set_cursor_style as *const u8, 2),
+        ("Window__is_key_down", "striv_auto_minifb_window_is_key_down", striv_auto_minifb_window_is_key_down as *const u8, 2),
+        ("Window__is_key_pressed", "striv_auto_minifb_window_is_key_pressed", striv_auto_minifb_window_is_key_pressed as *const u8, 3),
+        ("Window__is_key_released", "striv_auto_minifb_window_is_key_released", striv_auto_minifb_window_is_key_released as *const u8, 2),
+        ("Window__set_key_repeat_delay", "striv_auto_minifb_window_set_key_repeat_delay", striv_auto_minifb_window_set_key_repeat_delay as *const u8, 2),
+        ("Window__set_key_repeat_rate", "striv_auto_minifb_window_set_key_repeat_rate", striv_auto_minifb_window_set_key_repeat_rate as *const u8, 2),
+        ("Window__is_active", "striv_auto_minifb_window_is_active", striv_auto_minifb_window_is_active as *const u8, 1),
+        ("Window__remove_menu", "striv_auto_minifb_window_remove_menu", striv_auto_minifb_window_remove_menu as *const u8, 2),
+        ("Menu__new", "striv_auto_minifb_menu_new", striv_auto_minifb_menu_new as *const u8, 1),
+        ("Menu__destroy_menu", "striv_auto_minifb_menu_destroy_menu", striv_auto_minifb_menu_destroy_menu as *const u8, 1),
+        ("Menu__add_separator", "striv_auto_minifb_menu_add_separator", striv_auto_minifb_menu_add_separator as *const u8, 1),
+        ("WindowOptions__default", "striv_auto_minifb_windowoptions_default", striv_auto_minifb_windowoptions_default as *const u8, 0),
+        ("Rng__with_seed", "striv_auto_fastrand_rng_with_seed", striv_auto_fastrand_rng_with_seed as *const u8, 1),
+        ("Rng__fork", "striv_auto_fastrand_rng_fork", striv_auto_fastrand_rng_fork as *const u8, 1),
+        ("Rng__bool", "striv_auto_fastrand_rng_bool", striv_auto_fastrand_rng_bool as *const u8, 1),
+        ("Rng__f32_inclusive", "striv_auto_fastrand_rng_f32_inclusive", striv_auto_fastrand_rng_f32_inclusive as *const u8, 1),
+        ("Rng__f32", "striv_auto_fastrand_rng_f32", striv_auto_fastrand_rng_f32 as *const u8, 1),
+        ("Rng__f64_inclusive", "striv_auto_fastrand_rng_f64_inclusive", striv_auto_fastrand_rng_f64_inclusive as *const u8, 1),
+        ("Rng__f64", "striv_auto_fastrand_rng_f64", striv_auto_fastrand_rng_f64 as *const u8, 1),
+        ("Rng__seed", "striv_auto_fastrand_rng_seed", striv_auto_fastrand_rng_seed as *const u8, 2),
+        ("Rng__get_seed", "striv_auto_fastrand_rng_get_seed", striv_auto_fastrand_rng_get_seed as *const u8, 1),
+        ("seed", "striv_auto_fastrand_seed", striv_auto_fastrand_seed as *const u8, 1),
+        ("get_seed", "striv_auto_fastrand_get_seed", striv_auto_fastrand_get_seed as *const u8, 0),
+        ("bool", "striv_auto_fastrand_bool", striv_auto_fastrand_bool as *const u8, 0),
+        ("f32", "striv_auto_fastrand_f32", striv_auto_fastrand_f32 as *const u8, 0),
+        ("f32_inclusive", "striv_auto_fastrand_f32_inclusive", striv_auto_fastrand_f32_inclusive as *const u8, 0),
+        ("f64", "striv_auto_fastrand_f64", striv_auto_fastrand_f64 as *const u8, 0),
+        ("f64_inclusive", "striv_auto_fastrand_f64_inclusive", striv_auto_fastrand_f64_inclusive as *const u8, 0),
     ]
 }
 
@@ -533,5 +507,157 @@ pub fn exported_constants() -> &'static [(&'static str, i64)] {
         ("ScaleMode__AspectRatioStretch", 1),
         ("ScaleMode__Center", 2),
         ("ScaleMode__UpperLeft", 3),
+        ("Key__Key0", 0),
+        ("Key__Key1", 1),
+        ("Key__Key2", 2),
+        ("Key__Key3", 3),
+        ("Key__Key4", 4),
+        ("Key__Key5", 5),
+        ("Key__Key6", 6),
+        ("Key__Key7", 7),
+        ("Key__Key8", 8),
+        ("Key__Key9", 9),
+        ("Key__A", 10),
+        ("Key__B", 11),
+        ("Key__C", 12),
+        ("Key__D", 13),
+        ("Key__E", 14),
+        ("Key__F", 15),
+        ("Key__G", 16),
+        ("Key__H", 17),
+        ("Key__I", 18),
+        ("Key__J", 19),
+        ("Key__K", 20),
+        ("Key__L", 21),
+        ("Key__M", 22),
+        ("Key__N", 23),
+        ("Key__O", 24),
+        ("Key__P", 25),
+        ("Key__Q", 26),
+        ("Key__R", 27),
+        ("Key__S", 28),
+        ("Key__T", 29),
+        ("Key__U", 30),
+        ("Key__V", 31),
+        ("Key__W", 32),
+        ("Key__X", 33),
+        ("Key__Y", 34),
+        ("Key__Z", 35),
+        ("Key__F1", 36),
+        ("Key__F2", 37),
+        ("Key__F3", 38),
+        ("Key__F4", 39),
+        ("Key__F5", 40),
+        ("Key__F6", 41),
+        ("Key__F7", 42),
+        ("Key__F8", 43),
+        ("Key__F9", 44),
+        ("Key__F10", 45),
+        ("Key__F11", 46),
+        ("Key__F12", 47),
+        ("Key__F13", 48),
+        ("Key__F14", 49),
+        ("Key__F15", 50),
+        ("Key__Down", 51),
+        ("Key__Left", 52),
+        ("Key__Right", 53),
+        ("Key__Up", 54),
+        ("Key__Apostrophe", 55),
+        ("Key__Backquote", 56),
+        ("Key__Backslash", 57),
+        ("Key__Comma", 58),
+        ("Key__Equal", 59),
+        ("Key__LeftBracket", 60),
+        ("Key__Minus", 61),
+        ("Key__Period", 62),
+        ("Key__RightBracket", 63),
+        ("Key__Semicolon", 64),
+        ("Key__Slash", 65),
+        ("Key__Backspace", 66),
+        ("Key__Delete", 67),
+        ("Key__End", 68),
+        ("Key__Enter", 69),
+        ("Key__Escape", 70),
+        ("Key__Home", 71),
+        ("Key__Insert", 72),
+        ("Key__Menu", 73),
+        ("Key__PageDown", 74),
+        ("Key__PageUp", 75),
+        ("Key__Pause", 76),
+        ("Key__Space", 77),
+        ("Key__Tab", 78),
+        ("Key__NumLock", 79),
+        ("Key__CapsLock", 80),
+        ("Key__ScrollLock", 81),
+        ("Key__LeftShift", 82),
+        ("Key__RightShift", 83),
+        ("Key__LeftCtrl", 84),
+        ("Key__RightCtrl", 85),
+        ("Key__NumPad0", 86),
+        ("Key__NumPad1", 87),
+        ("Key__NumPad2", 88),
+        ("Key__NumPad3", 89),
+        ("Key__NumPad4", 90),
+        ("Key__NumPad5", 91),
+        ("Key__NumPad6", 92),
+        ("Key__NumPad7", 93),
+        ("Key__NumPad8", 94),
+        ("Key__NumPad9", 95),
+        ("Key__NumPadDot", 96),
+        ("Key__NumPadSlash", 97),
+        ("Key__NumPadAsterisk", 98),
+        ("Key__NumPadMinus", 99),
+        ("Key__NumPadPlus", 100),
+        ("Key__NumPadEnter", 101),
+        ("Key__LeftAlt", 102),
+        ("Key__RightAlt", 103),
+        ("Key__LeftSuper", 104),
+        ("Key__RightSuper", 105),
+        ("Key__Unknown", 106),
+        ("Key__Count", 107),
+    ]
+}
+
+pub fn exported_docs() -> &'static [(&'static str, &'static str, &'static str)] {
+    &[
+        ("Window__new", "fn Window::new(name: String, width: int, height: int, opts: WindowOptions) -> Window", "Opens up a new window\n\n# Examples\n\nOpen up a window with default settings\n\n```no_run\n# use minifb::*;\nlet mut window = match Window::new(\"Test\", 640, 400, WindowOptions::default()) {\nOk(win) => win,\nErr(err) => {\nprintln!(\"Unable to create window {}\", err);\nreturn;\n}\n};\n```\n\nOpen up a window that is resizeable\n\n```no_run\n# use minifb::*;\nlet mut window = Window::new(\"Test\", 640, 400,\nWindowOptions {\nresize: true,\n..WindowOptions::default()\n})\n.expect(\"Unable to open Window\");\n```"),
+        ("Window__set_title", "fn Window.set_title(title: String)", "Allows you to set a new title of the window after creation\n\n# Examples\n\n```no_run\n# use minifb::*;\nlet mut window = Window::new(\"Test\", 640, 400, WindowOptions::default()).unwrap();\n\nwindow.set_title(\"My New Title!\");\n```"),
+        ("Window__update_with_buffer", "fn Window.update_with_buffer(buffer: Vec, width: int, height: int)", "Updates the window with a 32-bit pixel buffer. The encoding for each pixel is `0RGB`:\nThe upper 8-bits are ignored, the next 8-bits are for the red channel, the next 8-bits\nafterwards for the green channel, and the lower 8-bits for the blue channel.\n\nNotice that the buffer needs to be at least the size of the created window. Also only one of\n`update_with_buffer` or `update` should be called for updating a single window.\n\n# Examples\n\n```no_run\n# use minifb::*;\nfn from_u8_rgb(r: u8, g: u8, b: u8) -> u32 {\nlet (r, g, b) = (r as u32, g as u32, b as u32);\n(r << 16) | (g << 8) | b\n}\nlet window_width = 600;\nlet window_height = 400;\nlet buffer_width = 600;\nlet buffer_height = 400;\n\nlet azure_blue = from_u8_rgb(0, 127, 255);\n\nlet mut buffer: Vec<u32> = vec![azure_blue; buffer_width * buffer_height];\n\nlet mut window = Window::new(\"Test\", window_width, window_height, WindowOptions::default()).unwrap();\n\nwindow.update_with_buffer(&buffer, buffer_width, buffer_height).unwrap();\n```"),
+        ("Window__update", "fn Window.update()", "Updates the window (this is required to call in order to get keyboard/mouse input, etc)\n\nNotice that when using this function then `update_with_buffer` should not be called for the same window.\nOnly one of the functions should be used.\n\n# Examples\n\n```no_run\n# use minifb::*;\nlet mut buffer: Vec<u32> = vec![0; 640 * 400];\n\nlet mut window = Window::new(\"Test\", 640, 400, WindowOptions::default()).unwrap();\n\nwindow.update();\n```"),
+        ("Window__is_open", "fn Window.is_open() -> bool", "Checks if the window is still open. A window can be closed by the user (by for example\npressing the close button on the window) It's up to the user to make sure that this is\nbeing checked and take action depending on the state.\n\n# Examples\n\n```no_run\n# use minifb::*;\n# let mut window = Window::new(\"Test\", 640, 400, WindowOptions::default()).unwrap();\nwhile window.is_open() {\n// Update window\n}\n```"),
+        ("Window__set_position", "fn Window.set_position(x: int, y: int)", "Sets the position of the window. This is useful if you have\nmore than one window and want to align them up on the screen\n\n# Examples\n\n```no_run\n# use minifb::*;\n# let mut window = Window::new(\"Test\", 640, 400, WindowOptions::default()).unwrap();\n// Moves the window to pixel position 20, 20 on the screen\nwindow.set_position(20, 20);\n```"),
+        ("Window__topmost", "fn Window.topmost(topmost: bool)", "Makes the window the topmost window and makes it stay always on top. This is useful if you\nwant the window to float above all over windows\n\n# Examples\n\n```no_run\n# use minifb::*;\n# let mut window = Window::new(\"Test\", 640, 400, WindowOptions::default()).unwrap();\n// Makes the window always on top\nwindow.topmost(true);\n```"),
+        ("Window__set_background_color", "fn Window.set_background_color(red: int, green: int, blue: int)", "Sets the background color that is used with update_with_buffer.\nIn some cases there will be a blank area around the buffer depending on the ScaleMode that has been set.\nThis color will be used in the in that area.\n\n# Examples\n\n```no_run\n# use minifb::*;\n# let mut window = Window::new(\"Test\", 640, 400, WindowOptions::default()).unwrap();\n// Set background color to bright red\nwindow.set_background_color(255, 0, 0);\n```"),
+        ("Window__set_cursor_visibility", "fn Window.set_cursor_visibility(visibility: bool)", "Changes whether or not the cursor image should be shown or if the cursor image\nshould be invisible inside the window\nWhen creating a new window the default is 'false'"),
+        ("Window__set_target_fps", "fn Window.set_target_fps(fps: int)", "Limits the FPS of polling for new events in order to reduce CPU usage.\nThe problem of having a tight loop that does something like this\n\n```no_run\n# use minifb::*;\n# let mut window = Window::new(\"Test\", 640, 400, WindowOptions::default()).unwrap();\nloop {\nwindow.update();\n}\n```\nIs that lots of CPU time will be spent calling system functions to check for new events in a tight loop making the CPU time go up.\nUsing `set_target_fps` minifb will check how many frames are left to reach the target FPS and if there are any it will sleep for that amount of frames.\nThis means that if more frames than the target happened (external code taking longer) minifb will not do any waiting at all so there is no loss in CPU performance with this feature.\nBy default it's set to 250 FPS. Setting this value to 0 and no waiting will be done\n\n# Examples\n\n```no_run\n# use minifb::*;\n# let mut window = Window::new(\"Test\", 640, 400, WindowOptions::default()).unwrap();\n// Set the target rate to 60 fps, meaning events will be polled every ~16.6 ms\nwindow.set_target_fps(60);\n```"),
+        ("Window__get_mouse_down", "fn Window.get_mouse_down(button: MouseButton) -> bool", "Check if a mouse button is down or not\n\n# Examples\n\n```no_run\n# use minifb::*;\n# let mut window = Window::new(\"Test\", 640, 400, WindowOptions::default()).unwrap();\nlet left_down = window.get_mouse_down(MouseButton::Left);\nprintln!(\"is left down? {}\", left_down)\n```"),
+        ("Window__set_cursor_style", "fn Window.set_cursor_style(cursor: CursorStyle)", "Set a different cursor style. This can be used if you have resizing\nelements or something like that\n\n# Examples\n\n```no_run\n# use minifb::*;\n# let mut window = Window::new(\"Test\", 640, 400, WindowOptions::default()).unwrap();\nwindow.set_cursor_style(CursorStyle::ResizeLeftRight);\n```"),
+        ("Window__is_key_down", "fn Window.is_key_down(key: Key) -> bool", "Check if a single key is down.\n\n# Examples\n\n```no_run\n# use minifb::*;\n# let mut window = Window::new(\"Test\", 640, 400, WindowOptions::default()).unwrap();\nif window.is_key_down(Key::A) {\nprintln!(\"Key A is down\");\n}\n```"),
+        ("Window__is_key_pressed", "fn Window.is_key_pressed(key: Key, repeat: KeyRepeat) -> bool", "Check if a single key is pressed. KeyRepeat will control if the key should be repeated or\nnot while being pressed.\n\n# Examples\n\n```no_run\n# use minifb::*;\n# let mut window = Window::new(\"Test\", 640, 400, WindowOptions::default()).unwrap();\nif window.is_key_pressed(Key::A, KeyRepeat::No) {\nprintln!(\"Key A is down\");\n}\n```"),
+        ("Window__is_key_released", "fn Window.is_key_released(key: Key) -> bool", "Check if a single key was released since last call to update."),
+        ("Window__set_key_repeat_delay", "fn Window.set_key_repeat_delay(delay: float)", "Sets the delay for when a key is being held before it starts being repeated the default\nvalue is 0.25 sec\n\n# Examples\n\n```no_run\n# use minifb::*;\n# let mut window = Window::new(\"Test\", 640, 400, WindowOptions::default()).unwrap();\nwindow.set_key_repeat_delay(0.5) // 0.5 sec before repeat starts\n```"),
+        ("Window__set_key_repeat_rate", "fn Window.set_key_repeat_rate(rate: float)", "Sets the rate in between when the keys has passed the initial repeat_delay. The default\nvalue is 0.05 sec\n\n# Examples\n\n```no_run\n# use minifb::*;\n# let mut window = Window::new(\"Test\", 640, 400, WindowOptions::default()).unwrap();\nwindow.set_key_repeat_rate(0.01) // 0.01 sec between keys\n```"),
+        ("Window__is_active", "fn Window.is_active() -> bool", "Returns if this windows is the current active one"),
+        ("Window__remove_menu", "fn Window.remove_menu(handle: MenuHandle)", "Remove a menu that has been added with [#add_menu]"),
+        ("Menu__new", "fn Menu::new(name: String) -> Menu", "Create a new menu. Returns error if failed"),
+        ("Menu__destroy_menu", "fn Menu.destroy_menu()", "Destroys a menu. Currently not implemented"),
+        ("Menu__add_separator", "fn Menu.add_separator()", "Adds a menu separator"),
+        ("WindowOptions__default", "fn WindowOptions::default() -> WindowOptions", "Returns the default `WindowOptions`."),
+        ("Rng__with_seed", "fn Rng::with_seed(seed: int) -> Rng", "Creates a new random number generator with the initial seed."),
+        ("Rng__fork", "fn Rng.fork() -> Rng", "Clones the generator by deterministically deriving a new generator based on the initial\nseed.\n\nThis function can be used to create a new generator that is a \"spinoff\" of the old\ngenerator. The new generator will not produce the same sequence of values as the\nold generator.\n\n# Example\n\n```\n// Seed two generators equally, and clone both of them.\nlet mut base1 = fastrand::Rng::with_seed(0x4d595df4d0f33173);\nbase1.bool(); // Use the generator once.\n\nlet mut base2 = fastrand::Rng::with_seed(0x4d595df4d0f33173);\nbase2.bool(); // Use the generator once.\n\nlet mut rng1 = base1.fork();\nlet mut rng2 = base2.fork();\n\nprintln!(\"rng1 returns {}\", rng1.u32(..));\nprintln!(\"rng2 returns {}\", rng2.u32(..));\n```"),
+        ("Rng__bool", "fn Rng.bool() -> bool", "Generates a random `bool`."),
+        ("Rng__f32_inclusive", "fn Rng.f32_inclusive() -> float", "Generates a random `f32` in range `0..=1`."),
+        ("Rng__f32", "fn Rng.f32() -> float", "Generates a random `f32` in range `0..1`.\n\nFunction `f32_inclusive()` is a little simpler and faster, so default\nto that if inclusive range is acceptable."),
+        ("Rng__f64_inclusive", "fn Rng.f64_inclusive() -> float", "Generates a random `f64` in range `0..=1`."),
+        ("Rng__f64", "fn Rng.f64() -> float", "Generates a random `f64` in range `0..1`.\n\nFunction `f64_inclusive()` is a little simpler and faster, so default\nto that if inclusive range is acceptable."),
+        ("Rng__seed", "fn Rng.seed(seed: int)", "Initializes this generator with the given seed."),
+        ("Rng__get_seed", "fn Rng.get_seed() -> int", "Gives back **current** seed that is being held by this generator."),
+        ("seed", "fn seed(seed: int)", "Initializes the thread-local generator with the given seed."),
+        ("get_seed", "fn get_seed() -> int", "Gives back **current** seed that is being held by the thread-local generator."),
+        ("bool", "fn bool() -> bool", "Generates a random `bool`."),
+        ("f32", "fn f32() -> float", "Generates a random `f32` in range `0..1`."),
+        ("f32_inclusive", "fn f32_inclusive() -> float", "Generates a random `f32` in range `0..=1`."),
+        ("f64", "fn f64() -> float", "Generates a random `f64` in range `0..1`."),
+        ("f64_inclusive", "fn f64_inclusive() -> float", "Generates a random `f64` in range `0..=1`."),
     ]
 }

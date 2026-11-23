@@ -406,6 +406,14 @@ impl JitCompiler {
                                 is_mut: *is_mut,
                             },
                         );
+                    } else if ty_name == "Vec" {
+                        vars.insert(
+                            name.clone(),
+                            VarInfo::Vec {
+                                var,
+                                is_mut: *is_mut,
+                            },
+                        );
                     } else if self.kept_structs.contains_key(ty_name) {
                         vars.insert(
                             name.clone(),

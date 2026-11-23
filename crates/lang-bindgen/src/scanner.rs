@@ -41,7 +41,10 @@ pub struct MethodInfo {
     pub name: String,
     pub receiver: Option<bool>, // None = assoc/free, Some(false) = &self, Some(true) = &mut self
     pub args: Vec<ArgKind>,
+    pub arg_metas: Vec<(String, String)>,
     pub ret: RetKind,
+    pub ret_str: String,
+    pub doc: String,
 }
 
 #[derive(Debug, Clone)]
@@ -151,31 +154,172 @@ pub fn resolve_crate_sources(deps: &[(String, String)]) -> Vec<(String, PathBuf)
     resolved
 }
 
+fn is_disabled_cfg(attrs: &[syn::Attribute]) -> bool {
+    for attr in attrs {
+        if attr.path().is_ident("cfg") {
+            let s = attr
+                .meta
+                .require_list()
+                .map(|l| l.tokens.to_string())
+                .unwrap_or_default();
+            if s.contains("not") && s.contains("windows") {
+                return true;
+            }
+            if s.contains("not (") || s.contains("not(") {
+                continue;
+            }
+            let forbidden = [
+                "unix",
+                "linux",
+                "macos",
+                "freebsd",
+                "netbsd",
+                "openbsd",
+                "dragonfly",
+                "wasm",
+                "android",
+                "ios",
+                "redox",
+                "test",
+            ];
+            if forbidden.iter().any(|k| s.contains(k)) && !s.contains("windows") {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn collect_use_names(tree: &syn::UseTree, out: &mut Vec<String>) {
+    match tree {
+        syn::UseTree::Name(n) => out.push(n.ident.to_string()),
+        syn::UseTree::Rename(r) => out.push(r.rename.to_string()),
+        syn::UseTree::Path(p) => collect_use_names(&p.tree, out),
+        syn::UseTree::Group(g) => {
+            for t in &g.items {
+                collect_use_names(t, out);
+            }
+        }
+        syn::UseTree::Glob(_) => {}
+    }
+}
+
+fn collect_all_items(
+    file_path: &Path,
+    items: &mut Vec<(PathBuf, Item)>,
+    root_exports: &mut Vec<String>,
+    is_root: bool,
+    depth: usize,
+) {
+    if depth > 4 {
+        return;
+    }
+    let Ok(source) = fs::read_to_string(file_path) else {
+        return;
+    };
+    let Ok(parsed) = syn::parse_file(&source) else {
+        return;
+    };
+    let dir = file_path.parent().unwrap_or(Path::new("."));
+    let stem = file_path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+    let mut sub_paths = Vec::new();
+    for item in parsed.items {
+        if is_root {
+            match &item {
+                Item::Use(u) if matches!(u.vis, Visibility::Public(_)) => {
+                    collect_use_names(&u.tree, root_exports);
+                }
+                Item::Struct(s) if matches!(s.vis, Visibility::Public(_)) => {
+                    root_exports.push(s.ident.to_string());
+                }
+                Item::Enum(e) if matches!(e.vis, Visibility::Public(_)) => {
+                    root_exports.push(e.ident.to_string());
+                }
+                _ => {}
+            }
+        }
+        if let Item::Mod(ref m) = item {
+            if is_disabled_cfg(&m.attrs) {
+                continue;
+            }
+            if m.content.is_none() {
+                let mod_name = m.ident.to_string();
+                let sub_dir = if stem == "lib" || stem == "mod" {
+                    dir.to_path_buf()
+                } else {
+                    dir.join(stem)
+                };
+                let cand1 = sub_dir.join(format!("{}.rs", mod_name));
+                let cand2 = sub_dir.join(&mod_name).join("mod.rs");
+                if cand1.exists() {
+                    sub_paths.push(cand1);
+                } else if cand2.exists() {
+                    sub_paths.push(cand2);
+                }
+            } else if let Some((_, ref inner)) = m.content {
+                for sub in inner {
+                    items.push((file_path.to_path_buf(), sub.clone()));
+                }
+            }
+        }
+        items.push((file_path.to_path_buf(), item));
+    }
+    for sub_path in sub_paths {
+        collect_all_items(&sub_path, items, root_exports, false, depth + 1);
+    }
+}
+
 pub fn scan_crate_api(crate_name: &str, lib_rs: &Path) -> CrateApi {
-    let source = fs::read_to_string(lib_rs)
-        .unwrap_or_else(|e| panic!("Failed to read {}: {}", lib_rs.display(), e));
-    let file = syn::parse_file(&source)
-        .unwrap_or_else(|e| panic!("Failed to parse {}: {}", lib_rs.display(), e));
+    let mut all_items = Vec::new();
+    let mut root_exports = Vec::new();
+    collect_all_items(lib_rs, &mut all_items, &mut root_exports, true, 0);
 
     let mut enums = Vec::new();
     let mut structs = Vec::new();
+    let mut struct_files = std::collections::HashMap::<String, PathBuf>::new();
+    let mut default_structs = Vec::new();
 
-    // Pass 1: collect public unit-only enums and public structs
-    for item in &file.items {
+    // Pass 1: collect public unit-only enums and public structs reachable at crate root
+    for (file_path, item) in &all_items {
         match item {
-            Item::Enum(e) if matches!(e.vis, Visibility::Public(_)) => {
+            Item::Enum(e)
+                if matches!(e.vis, Visibility::Public(_))
+                    && !is_disabled_cfg(&e.attrs)
+                    && root_exports.contains(&e.ident.to_string()) =>
+            {
+                let name = e.ident.to_string();
                 let all_unit = e.variants.iter().all(|v| matches!(v.fields, Fields::Unit));
-                if all_unit && !e.variants.is_empty() {
+                if all_unit
+                    && !e.variants.is_empty()
+                    && !enums.iter().any(|x: &EnumInfo| x.name == name)
+                {
                     enums.push(EnumInfo {
-                        name: e.ident.to_string(),
+                        name,
                         variants: e.variants.iter().map(|v| v.ident.to_string()).collect(),
                     });
                 }
             }
             Item::Struct(s)
-                if matches!(s.vis, Visibility::Public(_)) && s.generics.params.is_empty() =>
+                if matches!(s.vis, Visibility::Public(_))
+                    && !is_disabled_cfg(&s.attrs)
+                    && s.generics.params.is_empty()
+                    && root_exports.contains(&s.ident.to_string()) =>
             {
-                structs.push(s.ident.to_string());
+                let s_name = s.ident.to_string();
+                if !structs.contains(&s_name) {
+                    structs.push(s_name.clone());
+                    struct_files.insert(s_name.clone(), file_path.clone());
+                    let has_default = s.attrs.iter().any(|a| {
+                        a.path().is_ident("derive")
+                            && a.meta
+                                .require_list()
+                                .map(|l| l.tokens.to_string().contains("Default"))
+                                .unwrap_or(false)
+                    });
+                    if has_default {
+                        default_structs.push(s_name);
+                    }
+                }
             }
             _ => {}
         }
@@ -184,36 +328,90 @@ pub fn scan_crate_api(crate_name: &str, lib_rs: &Path) -> CrateApi {
     let enum_names: Vec<String> = enums.iter().map(|e| e.name.clone()).collect();
     let mut methods = Vec::new();
 
-    // Pass 2: collect public methods on structs and public free functions
-    for item in &file.items {
+    for s_name in &default_structs {
+        methods.push(MethodInfo {
+            struct_name: Some(s_name.clone()),
+            name: "default".to_string(),
+            receiver: None,
+            args: Vec::new(),
+            arg_metas: Vec::new(),
+            ret: RetKind::Handle(s_name.clone()),
+            ret_str: s_name.clone(),
+            doc: format!("Returns the default `{}`.", s_name),
+        });
+    }
+
+    // Pass 2: collect public methods on structs (only in the struct's defining file or crate root)
+    for (file_path, item) in &all_items {
         match item {
-            Item::Impl(imp) if imp.trait_.is_none() && imp.generics.params.is_empty() => {
+            Item::Impl(imp) if imp.generics.params.is_empty() && !is_disabled_cfg(&imp.attrs) => {
                 let Some(struct_name) = type_ident(&imp.self_ty) else {
                     continue;
                 };
                 if !structs.contains(&struct_name) {
                     continue;
                 }
+                if struct_files.get(&struct_name) != Some(file_path) {
+                    continue;
+                }
+                if let Some((_, trait_path, _)) = &imp.trait_ {
+                    if trait_path
+                        .segments
+                        .last()
+                        .map(|s| s.ident == "Default")
+                        .unwrap_or(false)
+                        && !methods.iter().any(|m| {
+                            m.struct_name.as_deref() == Some(&struct_name) && m.name == "default"
+                        })
+                    {
+                        methods.push(MethodInfo {
+                            struct_name: Some(struct_name.clone()),
+                            name: "default".to_string(),
+                            receiver: None,
+                            args: Vec::new(),
+                            arg_metas: Vec::new(),
+                            ret: RetKind::Handle(struct_name.clone()),
+                            ret_str: struct_name.clone(),
+                            doc: format!("Returns the default `{}`.", struct_name),
+                        });
+                    }
+                    continue;
+                }
                 for impl_item in &imp.items {
                     if let ImplItem::Fn(m) = impl_item {
                         if !matches!(m.vis, Visibility::Public(_))
                             || !m.sig.generics.params.is_empty()
+                            || is_disabled_cfg(&m.attrs)
                         {
                             continue;
                         }
-                        if let Some(info) =
+                        if let Some(mut info) =
                             parse_sig(Some(&struct_name), &m.sig, &enum_names, &structs)
                         {
-                            methods.push(info);
+                            info.doc = extract_docs(&m.attrs);
+                            if !methods
+                                .iter()
+                                .any(|x| x.struct_name == info.struct_name && x.name == info.name)
+                            {
+                                methods.push(info);
+                            }
                         }
                     }
                 }
             }
             Item::Fn(f)
-                if matches!(f.vis, Visibility::Public(_)) && f.sig.generics.params.is_empty() =>
+                if matches!(f.vis, Visibility::Public(_))
+                    && f.sig.generics.params.is_empty()
+                    && !is_disabled_cfg(&f.attrs) =>
             {
-                if let Some(info) = parse_sig(None, &f.sig, &enum_names, &structs) {
-                    methods.push(info);
+                if let Some(mut info) = parse_sig(None, &f.sig, &enum_names, &structs) {
+                    info.doc = extract_docs(&f.attrs);
+                    if !methods
+                        .iter()
+                        .any(|x| x.struct_name == info.struct_name && x.name == info.name)
+                    {
+                        methods.push(info);
+                    }
                 }
             }
             _ => {}
@@ -236,6 +434,44 @@ fn type_ident(ty: &Type) -> Option<String> {
     }
 }
 
+fn extract_docs(attrs: &[syn::Attribute]) -> String {
+    let mut lines = Vec::new();
+    for attr in attrs {
+        if attr.path().is_ident("doc") {
+            if let syn::Meta::NameValue(nv) = &attr.meta {
+                if let syn::Expr::Lit(el) = &nv.value {
+                    if let syn::Lit::Str(ls) = &el.lit {
+                        lines.push(ls.value().trim().to_string());
+                    }
+                }
+            }
+        }
+    }
+    lines.join("\n")
+}
+
+fn striv_type_label(kind: &ArgKind) -> String {
+    match kind {
+        ArgKind::Int(_) => "int".to_string(),
+        ArgKind::Bool => "bool".to_string(),
+        ArgKind::Float(_) => "float".to_string(),
+        ArgKind::StrRef => "String".to_string(),
+        ArgKind::U32Slice => "Vec".to_string(),
+        ArgKind::Enum(e) => e.clone(),
+        ArgKind::Handle(h) | ArgKind::HandleRef(h, _) => h.clone(),
+    }
+}
+
+fn striv_ret_label(ret: &RetKind) -> String {
+    match ret {
+        RetKind::Unit | RetKind::ResultUnit => String::new(),
+        RetKind::Int => "int".to_string(),
+        RetKind::Bool => "bool".to_string(),
+        RetKind::Float => "float".to_string(),
+        RetKind::Handle(s) | RetKind::ResultHandle(s) => s.clone(),
+    }
+}
+
 fn parse_sig(
     struct_name: Option<&str>,
     sig: &syn::Signature,
@@ -244,6 +480,7 @@ fn parse_sig(
 ) -> Option<MethodInfo> {
     let mut receiver = None;
     let mut args = Vec::new();
+    let mut arg_metas = Vec::new();
 
     for input in &sig.inputs {
         match input {
@@ -252,18 +489,28 @@ fn parse_sig(
                 receiver = Some(r.mutability.is_some());
             }
             FnArg::Typed(pt) => {
-                args.push(classify_arg(&pt.ty, enums, structs)?);
+                let kind = classify_arg(&pt.ty, enums, structs)?;
+                let p_name = match &*pt.pat {
+                    syn::Pat::Ident(pi) => pi.ident.to_string(),
+                    _ => format!("arg{}", args.len()),
+                };
+                arg_metas.push((p_name, striv_type_label(&kind)));
+                args.push(kind);
             }
         }
     }
 
     let ret = classify_ret(&sig.output, struct_name, structs)?;
+    let ret_str = striv_ret_label(&ret);
     Some(MethodInfo {
         struct_name: struct_name.map(|s| s.to_string()),
         name: sig.ident.to_string(),
         receiver,
         args,
+        arg_metas,
         ret,
+        ret_str,
+        doc: String::new(),
     })
 }
 
