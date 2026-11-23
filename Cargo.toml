@@ -1,0 +1,10 @@
+[workspace]
+resolver = "2"
+members = ["crates/lang-syntax", "crates/lang-jit", "crates/lang-cli"]
+
+[workspace.dependencies]
+logos = "0.16.1"
+cranelift = "0.138"
+cranelift-jit = "0.138"
+cranelift-module = "0.138"
+cranelift-native = "0.138"

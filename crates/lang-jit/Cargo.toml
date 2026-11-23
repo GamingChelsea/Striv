@@ -1,0 +1,11 @@
+[package]
+name = "lang-jit"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+lang-syntax = { path = "../lang-syntax" }
+cranelift.workspace = true
+cranelift-jit.workspace = true
+cranelift-module.workspace = true
+cranelift-native.workspace = true
