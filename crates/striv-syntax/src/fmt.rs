@@ -20,8 +20,8 @@ pub fn format_program(prog: &Program) -> String {
     // 1. Print all structs
     for s in &prog.structs {
         out.push_str(&format!("struct {} {{\n", s.name));
-        for f in &s.fields {
-            out.push_str(&format!("    {}: int,\n", f));
+        for (f, ty) in &s.fields {
+            out.push_str(&format!("    {}: {},\n", f, ty));
         }
         out.push_str("}\n\n");
     }
@@ -187,6 +187,7 @@ fn format_args(args: &[Expr]) -> String {
 fn format_expr(expr: &Expr) -> String {
     match expr {
         Expr::Int(v) => v.to_string(),
+        Expr::Float(v) => format!("{:?}", v),
         Expr::VecLit(items) => format!("[{}]", format_args(items)),
         Expr::Index { var, index } => format!("{}[{}]", var, format_expr(index)),
         Expr::StrInterp(parts) => {
@@ -220,6 +221,7 @@ fn format_expr(expr: &Expr) -> String {
                 Op::Add => "+",
                 Op::Sub => "-",
                 Op::Mul => "*",
+                Op::Div => "/",
                 Op::Lt => "<",
                 Op::Gt => ">",
                 Op::Eq => "==",

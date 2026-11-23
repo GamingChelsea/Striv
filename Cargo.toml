@@ -4,7 +4,7 @@ members = [
     "crates/striv-syntax",
     "crates/striv-jit",
     "crates/striv-cli",
-    "crates/lang-lsp", "crates/lang-runtime",
+    "crates/lang-lsp", "crates/lang-runtime", "crates/lang-bindgen",
 ]
 
 [workspace.dependencies]
@@ -18,3 +18,4 @@ tokio = { version = "1", features = ["full"] }
 tiny_http = "0.12"
 minifb = "0.27"
 slotmap = "1.0"
+syn = { version = "2", features = ["full", "parsing"] }

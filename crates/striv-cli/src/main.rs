@@ -68,8 +68,8 @@ fn main() {
             }
 
             let win_handle = lang_runtime::create_host_window("Striv Live Engine", 800, 600);
-            persistent_state[0] = 350;
-            persistent_state[1] = 250;
+            persistent_state[0] = 350.0_f64.to_bits() as i64;
+            persistent_state[1] = 250.0_f64.to_bits() as i64;
 
             println!(
                 "[Striv] Dev-Loop running! Edit '{}' in VS Code and press Ctrl+S!",
@@ -108,6 +108,24 @@ fn main() {
             loop {
                 main_fn();
                 std::thread::sleep(std::time::Duration::from_millis(800));
+            }
+        }
+        "bindgen" => {
+            let input = args
+                .get(2)
+                .expect("Please provide a Rust file: striv-cli bindgen bridge.rs");
+            let rust_src = fs::read_to_string(input).expect("Could not read file");
+            let (code, funcs) = lang_bindgen::generate_rust_bridge(&rust_src);
+
+            fs::write("crates/lang-runtime/src/generated_bridge.rs", code)
+                .expect("Could not write generated_bridge.rs");
+
+            println!("[Striv] Exported {} Rust functions for Striv:", funcs.len());
+            for f in funcs {
+                println!(
+                    "  -> {} ({} params) => {}",
+                    f.striv_name, f.param_count, f.c_symbol
+                );
             }
         }
         "lsp" => {

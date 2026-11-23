@@ -15,11 +15,15 @@ extern "C" fn host_print_struct(data_ptr: *const i64, def_ptr: *const StructDef)
     let values = unsafe { std::slice::from_raw_parts(data_ptr, def.fields.len()) };
 
     print!(">> {} {{ ", def.name);
-    for (i, field_name) in def.fields.iter().enumerate() {
+    for (i, (field_name, field_ty)) in def.fields.iter().enumerate() {
         if i > 0 {
             print!(", ");
         }
-        print!("{}: {}", field_name, values[i]);
+        if field_ty == "float" {
+            print!("{}: {}", field_name, f64::from_bits(values[i] as u64));
+        } else {
+            print!("{}: {}", field_name, values[i]);
+        }
     }
     println!(" }}");
 }
@@ -28,6 +32,10 @@ extern "C" fn host_print_struct(data_ptr: *const i64, def_ptr: *const StructDef)
 #[derive(Clone)]
 enum VarInfo {
     Int {
+        var: Variable,
+        is_mut: bool,
+    },
+    Float {
         var: Variable,
         is_mut: bool,
     },
@@ -133,6 +141,9 @@ impl JitCompiler {
         builder.symbol("striv_clear", lang_runtime::striv_clear as *const u8);
         builder.symbol("striv_rect", lang_runtime::striv_rect as *const u8);
         builder.symbol("striv_key_down", lang_runtime::striv_key_down as *const u8);
+        for &(_, c_sym, ptr, _) in lang_runtime::generated_bridge::exported_symbols() {
+            builder.symbol(c_sym, ptr);
+        }
 
         Self {
             module: JITModule::new(builder),
@@ -326,6 +337,24 @@ impl JitCompiler {
                     "draw_rect".to_string(),
                     (rect_ref, vec![("int".into(), false); 6]),
                 );
+                for &(striv_name, c_sym, _, param_count) in
+                    lang_runtime::generated_bridge::exported_symbols()
+                {
+                    let mut sig_ext = self.module.make_signature();
+                    for _ in 0..param_count {
+                        sig_ext.params.push(AbiParam::new(int_ty));
+                    }
+                    sig_ext.returns.push(AbiParam::new(int_ty));
+                    let ext_id = self
+                        .module
+                        .declare_function(c_sym, Linkage::Import, &sig_ext)
+                        .unwrap();
+                    let ext_ref = self.module.declare_func_in_func(ext_id, builder.func);
+                    funcs_map.insert(
+                        striv_name.to_string(),
+                        (ext_ref, vec![("int".into(), false); param_count]),
+                    );
+                }
 
                 let mut env = CompileEnv {
                     int_ty,
@@ -458,9 +487,44 @@ fn field_offset(def: &StructDef, field: &str) -> i32 {
     let idx = def
         .fields
         .iter()
-        .position(|f| f == field)
+        .position(|(f, _)| f == field)
         .unwrap_or_else(|| panic!("Unknown field '{}' in struct '{}'", field, def.name));
     (idx * 8) as i32
+}
+
+fn field_is_float(def: &StructDef, field: &str) -> bool {
+    def.fields
+        .iter()
+        .find(|(f, _)| f == field)
+        .map(|(_, ty)| ty == "float")
+        .unwrap_or(false)
+}
+
+fn is_float_expr(expr: &Expr, vars: &HashMap<String, VarInfo>, env: &CompileEnv) -> bool {
+    match expr {
+        Expr::Float(_) => true,
+        Expr::Var(n) => matches!(vars.get(n), Some(VarInfo::Float { .. })),
+        Expr::FieldAccess { var, field } => match vars.get(var) {
+            Some(VarInfo::Struct { struct_name, .. })
+            | Some(VarInfo::StructPtr { struct_name, .. }) => {
+                field_is_float(env.structs.get(struct_name).unwrap(), field)
+            }
+            _ => false,
+        },
+        Expr::BinOp { left, op, right } => {
+            !matches!(op, Op::Lt | Op::Gt | Op::Eq)
+                && (is_float_expr(left, vars, env) || is_float_expr(right, vars, env))
+        }
+        _ => false,
+    }
+}
+
+fn to_f64(val: Value, builder: &mut FunctionBuilder) -> Value {
+    if builder.func.dfg.value_type(val) == types::F64 {
+        val
+    } else {
+        builder.ins().fcvt_from_sint(types::F64, val)
+    }
 }
 
 fn compile_call(
@@ -519,7 +583,11 @@ fn compile_call(
                 _ => {}
             }
         }
-        arg_vals.push(compile_expr(arg, builder, vars, env));
+        let mut val = compile_expr(arg, builder, vars, env);
+        if builder.func.dfg.value_type(val) == types::F64 {
+            val = builder.ins().fcvt_to_sint_sat(env.int_ty, val);
+        }
+        arg_vals.push(val);
     }
 
     let call = builder.ins().call(func_ref, &arg_vals);
@@ -611,7 +679,10 @@ fn compile_stmt(
                 ));
 
                 for (f_name, f_expr) in fields {
-                    let val = compile_expr(f_expr, builder, vars, env);
+                    let mut val = compile_expr(f_expr, builder, vars, env);
+                    if field_is_float(def, f_name) {
+                        val = to_f64(val, builder);
+                    }
                     let offset = field_offset(def, f_name);
                     builder.ins().stack_store(env.int_ty, val, slot, offset);
                 }
@@ -648,6 +719,17 @@ fn compile_stmt(
                         is_mut: *is_mut,
                     },
                 );
+            } else if is_float_expr(value, vars, env) {
+                let val = to_f64(compile_expr(value, builder, vars, env), builder);
+                let var = builder.declare_var(types::F64);
+                builder.def_var(var, val);
+                vars.insert(
+                    name.clone(),
+                    VarInfo::Float {
+                        var,
+                        is_mut: *is_mut,
+                    },
+                );
             } else {
                 // Case B: Regular integer
                 let val = compile_expr(value, builder, vars, env);
@@ -663,17 +745,23 @@ fn compile_stmt(
             }
             false
         }
-        Stmt::Assign { name, value } => {
-            let Some(VarInfo::Int { var, is_mut }) = vars.get(name).cloned() else {
-                panic!("'{}' is not a regular integer variable", name);
-            };
-            assert!(is_mut, "Error: '{}' is not `mut`!", name);
-            let val = compile_expr(value, builder, vars, env);
-            builder.def_var(var, val);
-            false
-        }
+        Stmt::Assign { name, value } => match vars.get(name).cloned() {
+            Some(VarInfo::Int { var, is_mut }) => {
+                assert!(is_mut, "Error: '{}' is not `mut`!", name);
+                let val = compile_expr(value, builder, vars, env);
+                builder.def_var(var, val);
+                false
+            }
+            Some(VarInfo::Float { var, is_mut }) => {
+                assert!(is_mut, "Error: '{}' is not `mut`!", name);
+                let val = to_f64(compile_expr(value, builder, vars, env), builder);
+                builder.def_var(var, val);
+                false
+            }
+            _ => panic!("'{}' is not a regular number variable", name),
+        },
         Stmt::FieldAssign { var, field, value } => {
-            let val = compile_expr(value, builder, vars, env);
+            let mut val = compile_expr(value, builder, vars, env);
             match vars.get(var).cloned() {
                 Some(VarInfo::Struct {
                     slot,
@@ -681,7 +769,11 @@ fn compile_stmt(
                     is_mut,
                 }) => {
                     assert!(is_mut, "Error: '{}' is not `mut`!", var);
-                    let offset = field_offset(env.structs.get(&struct_name).unwrap(), field);
+                    let def = env.structs.get(&struct_name).unwrap();
+                    if field_is_float(def, field) {
+                        val = to_f64(val, builder);
+                    }
+                    let offset = field_offset(def, field);
                     builder.ins().stack_store(env.int_ty, val, slot, offset);
                 }
                 Some(VarInfo::StructPtr {
@@ -690,7 +782,11 @@ fn compile_stmt(
                     is_mut,
                 }) => {
                     assert!(is_mut, "Error: parameter '{}' is not `mut`!", var);
-                    let offset = field_offset(env.structs.get(&struct_name).unwrap(), field);
+                    let def = env.structs.get(&struct_name).unwrap();
+                    if field_is_float(def, field) {
+                        val = to_f64(val, builder);
+                    }
+                    let offset = field_offset(def, field);
                     let addr = builder.use_var(ptr_var);
                     builder.ins().store(MemFlagsData::new(), val, addr, offset);
                 }
@@ -864,6 +960,7 @@ fn compile_expr(
 ) -> Value {
     match expr {
         Expr::Int(v) => builder.ins().iconst(env.int_ty, *v),
+        Expr::Float(v) => builder.ins().f64const(*v),
         Expr::VecLit(items) => {
             let c_new = builder.ins().call(env.vec_new_ref, &[]);
             let v_ptr = builder.inst_results(c_new)[0];
@@ -942,6 +1039,7 @@ fn compile_expr(
         }
         Expr::Var(name) => match vars.get(name) {
             Some(VarInfo::Int { var, .. })
+            | Some(VarInfo::Float { var, .. })
             | Some(VarInfo::Str { var, .. })
             | Some(VarInfo::Vec { var, .. }) => builder.use_var(*var),
             Some(VarInfo::Tweak { addr }) => {
@@ -956,21 +1054,29 @@ fn compile_expr(
             Some(VarInfo::Struct {
                 slot, struct_name, ..
             }) => {
-                let offset = field_offset(env.structs.get(struct_name).unwrap(), field);
-                builder
-                    .ins()
-                    .stack_load(env.int_ty, env.int_ty, *slot, offset)
+                let def = env.structs.get(struct_name).unwrap();
+                let ty = if field_is_float(def, field) {
+                    types::F64
+                } else {
+                    env.int_ty
+                };
+                let offset = field_offset(def, field);
+                builder.ins().stack_load(ty, env.int_ty, *slot, offset)
             }
             Some(VarInfo::StructPtr {
                 ptr_var,
                 struct_name,
                 ..
             }) => {
-                let offset = field_offset(env.structs.get(struct_name).unwrap(), field);
+                let def = env.structs.get(struct_name).unwrap();
+                let ty = if field_is_float(def, field) {
+                    types::F64
+                } else {
+                    env.int_ty
+                };
+                let offset = field_offset(def, field);
                 let addr = builder.use_var(*ptr_var);
-                builder
-                    .ins()
-                    .load(env.int_ty, MemFlagsData::new(), addr, offset)
+                builder.ins().load(ty, MemFlagsData::new(), addr, offset)
             }
             _ => panic!("'{}' is not a struct!", var),
         },
@@ -980,13 +1086,30 @@ fn compile_expr(
         Expr::BinOp { left, op, right } => {
             let l = compile_expr(left, builder, vars, env);
             let r = compile_expr(right, builder, vars, env);
-            match op {
-                Op::Add => builder.ins().iadd(l, r),
-                Op::Sub => builder.ins().isub(l, r),
-                Op::Mul => builder.ins().imul(l, r),
-                Op::Lt => builder.ins().icmp(IntCC::SignedLessThan, l, r),
-                Op::Gt => builder.ins().icmp(IntCC::SignedGreaterThan, l, r),
-                Op::Eq => builder.ins().icmp(IntCC::Equal, l, r),
+            let is_float = builder.func.dfg.value_type(l) == types::F64
+                || builder.func.dfg.value_type(r) == types::F64;
+            if is_float {
+                let lf = to_f64(l, builder);
+                let rf = to_f64(r, builder);
+                match op {
+                    Op::Add => builder.ins().fadd(lf, rf),
+                    Op::Sub => builder.ins().fsub(lf, rf),
+                    Op::Mul => builder.ins().fmul(lf, rf),
+                    Op::Div => builder.ins().fdiv(lf, rf),
+                    Op::Lt => builder.ins().fcmp(FloatCC::LessThan, lf, rf),
+                    Op::Gt => builder.ins().fcmp(FloatCC::GreaterThan, lf, rf),
+                    Op::Eq => builder.ins().fcmp(FloatCC::Equal, lf, rf),
+                }
+            } else {
+                match op {
+                    Op::Add => builder.ins().iadd(l, r),
+                    Op::Sub => builder.ins().isub(l, r),
+                    Op::Mul => builder.ins().imul(l, r),
+                    Op::Div => builder.ins().sdiv(l, r),
+                    Op::Lt => builder.ins().icmp(IntCC::SignedLessThan, l, r),
+                    Op::Gt => builder.ins().icmp(IntCC::SignedGreaterThan, l, r),
+                    Op::Eq => builder.ins().icmp(IntCC::Equal, l, r),
+                }
             }
         }
         Expr::Call { name, args } => compile_call(name, args, builder, vars, env),

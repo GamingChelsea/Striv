@@ -22,7 +22,7 @@ pub struct Program {
 #[derive(Debug, Clone)]
 pub struct StructDef {
     pub name: String,
-    pub fields: Vec<String>, // Field names in order (each field = 8 bytes)
+    pub fields: Vec<(String, String)>, // (field_name, type_name)
 }
 
 #[derive(Debug, Clone)]
@@ -84,6 +84,7 @@ pub enum StringPart {
 #[derive(Debug, Clone)]
 pub enum Expr {
     Int(i64),
+    Float(f64),
     StrInterp(Vec<StringPart>),
     VecLit(Vec<Expr>),
     Index {
@@ -120,6 +121,7 @@ pub enum Op {
     Add,
     Sub,
     Mul,
+    Div,
     Lt,
     Gt,
     Eq,
@@ -182,11 +184,16 @@ pub enum Token {
     Minus,
     #[token("*")]
     Star,
+    #[token("/")]
+    Slash,
     #[token("<")]
     Lt,
     #[token(">")]
     Gt,
 
+    #[regex("[0-9]+\\.[0-9]+", |lex| lex.slice().parse::<f64>().ok())]
+    Float(f64),
+    #[regex("0x[0-9a-fA-F]+", |lex| i64::from_str_radix(&lex.slice()[2..], 16).ok())]
     #[regex("[0-9]+", |lex| lex.slice().parse::<i64>().ok())]
     Int(i64),
 
@@ -229,8 +236,10 @@ impl Token {
             Token::Plus => "`+`".to_string(),
             Token::Minus => "`-`".to_string(),
             Token::Star => "`*`".to_string(),
+            Token::Slash => "`/`".to_string(),
             Token::Lt => "`<`".to_string(),
             Token::Gt => "`>`".to_string(),
+            Token::Float(f) => format!("number `{}`", f),
             Token::Int(n) => format!("number `{}`", n),
             Token::Ident(s) => format!("`{}`", s),
             Token::Str(s) => format!("\"{}\"", s),
@@ -372,11 +381,13 @@ impl Parser {
         let mut fields = Vec::new();
         while self.peek() != Some(&Token::RBrace) {
             let Some(Token::Ident(f_name)) = self.next() else {
-                panic!("Field name expected")
+                self.error("Expected field name")
             };
             self.expect(Token::Colon);
-            self.next(); // Typ (`int`) überspringen
-            fields.push(f_name);
+            let Some(Token::Ident(f_ty)) = self.next() else {
+                self.error("Expected field type")
+            };
+            fields.push((f_name, f_ty));
             if self.peek() == Some(&Token::Comma) {
                 self.next();
             }
@@ -593,6 +604,7 @@ impl Parser {
             Some(Token::Plus) => Some(Op::Add),
             Some(Token::Minus) => Some(Op::Sub),
             Some(Token::Star) => Some(Op::Mul),
+            Some(Token::Slash) => Some(Op::Div),
             Some(Token::Lt) => Some(Op::Lt),
             Some(Token::Gt) => Some(Op::Gt),
             Some(Token::EqEq) => Some(Op::Eq),
@@ -625,6 +637,12 @@ impl Parser {
     fn parse_primary(&mut self) -> Expr {
         match self.next() {
             Some(Token::Int(v)) => Expr::Int(v),
+            Some(Token::Float(v)) => Expr::Float(v),
+            Some(Token::Minus) => Expr::BinOp {
+                left: Box::new(Expr::Int(0)),
+                op: Op::Sub,
+                right: Box::new(self.parse_primary()),
+            },
             Some(Token::Str(raw)) => {
                 let mut parts = Vec::new();
                 let mut rest = raw.as_str();

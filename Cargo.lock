@@ -676,6 +676,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "lang-bindgen"
+version = "0.1.0"
+dependencies = [
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "lang-lsp"
 version = "0.1.0"
 dependencies = [
@@ -1248,6 +1255,7 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 name = "striv-cli"
 version = "0.1.0"
 dependencies = [
+ "lang-bindgen",
  "lang-lsp",
  "lang-runtime",
  "striv-jit",

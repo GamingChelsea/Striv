@@ -1,3 +1,5 @@
+pub mod generated_bridge;
+
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::thread;
@@ -413,6 +415,8 @@ pub extern "C" fn striv_key_down(handle_bits: i64, key_code: i64) -> i64 {
         3 => Key::Up,
         4 => Key::Down,
         5 => Key::Space,
+        6 => Key::A,
+        7 => Key::D,
         _ => return 0,
     };
     WINDOWS.with(|w| {

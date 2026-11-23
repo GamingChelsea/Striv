@@ -178,11 +178,11 @@ impl LanguageServer for StrivLsp {
                 if let Some(struct_name) = infer_var_struct(src, &var_name, prog) {
                     // 1. Struct fields first ("0_...")
                     if let Some(s) = prog.structs.iter().find(|s| s.name == struct_name) {
-                        for f in &s.fields {
+                        for (f, ty) in &s.fields {
                             items.push(CompletionItem {
                                 label: f.clone(),
                                 kind: Some(CompletionItemKind::FIELD),
-                                detail: Some("int".to_string()),
+                                detail: Some(ty.clone()),
                                 sort_text: Some(format!("0_{}", f)),
                                 ..Default::default()
                             });
