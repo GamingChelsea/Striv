@@ -14,15 +14,26 @@ pub enum TweakVal {
 }
 
 #[derive(Debug, Clone)]
+pub struct EnumVariant {
+    pub name: String,
+    pub field_types: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
 pub struct EnumDef {
     pub name: String,
-    pub variants: Vec<String>,
+    pub variants: Vec<EnumVariant>,
 }
 
 #[derive(Debug, Clone)]
 pub enum MatchPat {
     Wildcard,
     Expr(Expr),
+    EnumDestructure {
+        enum_name: String,
+        variant: String,
+        bindings: Vec<String>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -57,6 +68,13 @@ pub enum AssignTarget {
 }
 
 #[derive(Debug, Clone)]
+pub struct SelectRecvArm {
+    pub bind_var: String,
+    pub channel_var: String,
+    pub body: Vec<Stmt>,
+}
+
+#[derive(Debug, Clone)]
 pub enum Stmt {
     Let {
         name: String,
@@ -67,7 +85,33 @@ pub enum Stmt {
     ForEach {
         var: String,
         is_mut: bool,
+        is_parallel: bool,
         collection: String,
+        body: Vec<Stmt>,
+    },
+    Concurrent(Vec<Stmt>),
+    Spawn {
+        name: String,
+        args: Vec<Expr>,
+    },
+    Shared {
+        name: String,
+        value: Expr,
+    },
+    Lock {
+        var: String,
+        body: Vec<Stmt>,
+    },
+    Select {
+        arms: Vec<SelectRecvArm>,
+        timeout: Option<(Expr, Vec<Stmt>)>,
+    },
+    Defer(Box<Stmt>),
+    Block(Vec<Stmt>),
+    Yield,
+    BlockCall {
+        name: String,
+        args: Vec<Expr>,
         body: Vec<Stmt>,
     },
     LetTuple {
@@ -243,6 +287,24 @@ pub enum Token {
     For,
     #[token("in")]
     In,
+    #[token("concurrent")]
+    Concurrent,
+    #[token("spawn")]
+    Spawn,
+    #[token("shared")]
+    Shared,
+    #[token("lock")]
+    Lock,
+    #[token("parallel")]
+    Parallel,
+    #[token("select")]
+    Select,
+    #[token("timeout")]
+    Timeout,
+    #[token("defer")]
+    Defer,
+    #[token("yield")]
+    Yield,
     #[token("Ok")]
     OkKw,
     #[token("Err")]
@@ -349,6 +411,15 @@ impl Token {
             Token::While => "`while`".to_string(),
             Token::For => "`for`".to_string(),
             Token::In => "`in`".to_string(),
+            Token::Concurrent => "`concurrent`".to_string(),
+            Token::Spawn => "`spawn`".to_string(),
+            Token::Shared => "`shared`".to_string(),
+            Token::Lock => "`lock`".to_string(),
+            Token::Parallel => "`parallel`".to_string(),
+            Token::Select => "`select`".to_string(),
+            Token::Timeout => "`timeout`".to_string(),
+            Token::Defer => "`defer`".to_string(),
+            Token::Yield => "`yield`".to_string(),
             Token::OkKw => "`Ok`".to_string(),
             Token::ErrKw => "`Err`".to_string(),
             Token::SomeKw => "`Some`".to_string(),
@@ -563,7 +634,21 @@ impl Parser {
             let Some(Token::Ident(v_name)) = self.next() else {
                 self.error("Expected variant name in `enum`");
             };
-            variants.push(v_name);
+            let mut field_types = Vec::new();
+            if self.peek() == Some(&Token::LParen) {
+                self.next(); // `(`
+                while self.peek() != Some(&Token::RParen) {
+                    field_types.push(self.parse_type_name());
+                    if self.peek() == Some(&Token::Comma) {
+                        self.next();
+                    }
+                }
+                self.expect(Token::RParen);
+            }
+            variants.push(EnumVariant {
+                name: v_name,
+                field_types,
+            });
             if self.peek() == Some(&Token::Comma) {
                 self.next();
             }
@@ -655,7 +740,13 @@ impl Parser {
 
         let mut params = Vec::new();
         while self.peek() != Some(&Token::RParen) {
-            let is_mut = if self.peek() == Some(&Token::Mut) {
+            let is_shared = if self.peek() == Some(&Token::Shared) {
+                self.next();
+                true
+            } else {
+                false
+            };
+            let is_mut = if !is_shared && self.peek() == Some(&Token::Mut) {
                 self.next();
                 true
             } else {
@@ -665,8 +756,11 @@ impl Parser {
                 panic!("Param name expected")
             };
             self.expect(Token::Colon);
-            let Some(Token::Ident(ty_name)) = self.next() else {
-                panic!("Type expected")
+            let raw_ty = self.parse_type_name();
+            let ty_name = if is_shared {
+                format!("shared:{}", raw_ty)
+            } else {
+                raw_ty
             };
             params.push((p_name, ty_name, is_mut));
             if self.peek() == Some(&Token::Comma) {
@@ -777,6 +871,119 @@ impl Parser {
                 self.expect(Token::RParen);
                 Stmt::Print(expr)
             }
+            Some(Token::Defer) => {
+                self.next();
+                if self.peek() == Some(&Token::LBrace) {
+                    Stmt::Defer(Box::new(Stmt::Block(self.parse_block())))
+                } else {
+                    Stmt::Defer(Box::new(self.parse_stmt()))
+                }
+            }
+            Some(Token::Yield) => {
+                self.next();
+                if self.peek() == Some(&Token::LParen) {
+                    self.next();
+                    self.expect(Token::RParen);
+                }
+                Stmt::Yield
+            }
+            Some(Token::Select) => {
+                self.next();
+                self.expect(Token::LBrace);
+                let mut arms = Vec::new();
+                let mut timeout = None;
+                while self.peek() != Some(&Token::RBrace) {
+                    if self.peek() == Some(&Token::Timeout) {
+                        self.next();
+                        self.expect(Token::LParen);
+                        let ms_expr = self.parse_expr();
+                        self.expect(Token::RParen);
+                        self.expect(Token::FatArrow);
+                        let body = self.parse_block();
+                        if self.peek() == Some(&Token::Comma) {
+                            self.next();
+                        }
+                        timeout = Some((ms_expr, body));
+                    } else {
+                        let Some(Token::Ident(bind_var)) = self.next() else {
+                            self.error("Expected variable name or `timeout` in `select`");
+                        };
+                        self.expect(Token::Assign);
+                        let Some(Token::Ident(channel_var)) = self.next() else {
+                            self.error("Expected channel variable after `=`");
+                        };
+                        self.expect(Token::Dot);
+                        let Some(Token::Ident(m)) = self.next() else {
+                            self.error("Expected `.recv()` in `select`");
+                        };
+                        if m != "recv" {
+                            self.error("Expected `.recv()` in `select`");
+                        }
+                        self.expect(Token::LParen);
+                        self.expect(Token::RParen);
+                        self.expect(Token::FatArrow);
+                        let body = self.parse_block();
+                        if self.peek() == Some(&Token::Comma) {
+                            self.next();
+                        }
+                        arms.push(SelectRecvArm {
+                            bind_var,
+                            channel_var,
+                            body,
+                        });
+                    }
+                }
+                self.expect(Token::RBrace);
+                Stmt::Select { arms, timeout }
+            }
+            Some(Token::Shared) => {
+                self.next();
+                let Some(Token::Ident(name)) = self.next() else {
+                    self.error("Expected variable name after `shared`");
+                };
+                self.expect(Token::Assign);
+                Stmt::Shared {
+                    name,
+                    value: self.parse_expr(),
+                }
+            }
+            Some(Token::Lock) => {
+                self.next();
+                let Some(Token::Ident(var)) = self.next() else {
+                    self.error("Expected variable name after `lock`");
+                };
+                Stmt::Lock {
+                    var,
+                    body: self.parse_block(),
+                }
+            }
+            Some(Token::Concurrent) => {
+                self.next();
+                Stmt::Concurrent(self.parse_block())
+            }
+            Some(Token::Spawn) => {
+                self.next();
+                let Some(Token::Ident(name)) = self.next() else {
+                    self.error("Expected function name after `spawn`");
+                };
+                Stmt::Spawn {
+                    name,
+                    args: self.parse_args(),
+                }
+            }
+            Some(Token::Parallel) => {
+                self.next();
+                if self.peek() != Some(&Token::For) {
+                    self.error("Expected `for` after `parallel`");
+                }
+                let mut stmt = self.parse_stmt();
+                if let Stmt::ForEach { is_parallel, .. } = &mut stmt {
+                    *is_parallel = true;
+                    stmt
+                } else {
+                    self.error("`parallel` is currently only supported on `for ... in list` loops")
+                }
+            }
             Some(Token::For) => {
                 self.next(); // consume `for`
                 let is_mut = if self.peek() == Some(&Token::Mut) {
@@ -805,6 +1012,7 @@ impl Parser {
                     Stmt::ForEach {
                         var,
                         is_mut,
+                        is_parallel: false,
                         collection: coll_name,
                         body,
                     }
@@ -822,7 +1030,27 @@ impl Parser {
                         self.next();
                         MatchPat::Wildcard
                     } else {
-                        MatchPat::Expr(self.parse_expr())
+                        let e = self.parse_expr();
+                        if let Expr::Call { name, args } = &e {
+                            if let Some((en, vn)) = name.split_once("__") {
+                                let bindings: Vec<String> = args
+                                    .iter()
+                                    .map(|a| match a {
+                                        Expr::Var(b) => b.clone(),
+                                        _ => self.error("Variable name expected in enum pattern"),
+                                    })
+                                    .collect();
+                                MatchPat::EnumDestructure {
+                                    enum_name: en.to_string(),
+                                    variant: vn.to_string(),
+                                    bindings,
+                                }
+                            } else {
+                                MatchPat::Expr(e)
+                            }
+                        } else {
+                            MatchPat::Expr(e)
+                        }
                     };
                     self.expect(Token::FatArrow);
                     let body = self.parse_block();
@@ -859,9 +1087,25 @@ impl Parser {
                         args: self.parse_args(),
                     }
                 } else if self.peek() == Some(&Token::LParen) {
-                    Stmt::Call {
+                    let args = self.parse_args();
+                    if self.peek() == Some(&Token::LBrace) {
+                        let body = self.parse_block();
+                        Stmt::BlockCall { name, args, body }
+                    } else {
+                        Stmt::Call { name, args }
+                    }
+                } else if self.peek() == Some(&Token::LBrace)
+                    && name
+                        .chars()
+                        .next()
+                        .map(|c| c.is_lowercase())
+                        .unwrap_or(false)
+                {
+                    let body = self.parse_block();
+                    Stmt::BlockCall {
                         name,
-                        args: self.parse_args(),
+                        args: Vec::new(),
+                        body,
                     }
                 } else if self.peek() == Some(&Token::Dot) {
                     self.next(); // consume `.`
@@ -1312,6 +1556,68 @@ fn check_stmts_mut(
         match stmt {
             Stmt::Let { name, is_mut, .. } => {
                 mut_vars.insert(name.clone(), *is_mut);
+            }
+            Stmt::Shared { name, .. } => {
+                mut_vars.insert(name.clone(), false);
+            }
+            Stmt::Lock { var, body } => {
+                let prev = mut_vars.insert(var.clone(), true);
+                check_stmts_mut(src, body, mut_vars, errors);
+                if let Some(p) = prev {
+                    mut_vars.insert(var.clone(), p);
+                } else {
+                    mut_vars.remove(var);
+                }
+            }
+            Stmt::Match { target, arms } => {
+                let has_wildcard = arms.iter().any(|(p, _)| matches!(p, MatchPat::Wildcard));
+                if !has_wildcard {
+                    let mut enum_name: Option<String> = None;
+                    for (p, _) in arms {
+                        match p {
+                            MatchPat::EnumDestructure { enum_name: en, .. } => {
+                                enum_name = Some(en.clone());
+                                break;
+                            }
+                            MatchPat::Expr(Expr::PathConst { ty, .. }) => {
+                                enum_name = Some(ty.clone());
+                                break;
+                            }
+                            _ => {}
+                        }
+                    }
+                    if let Some(en) = enum_name {
+                        let covered: std::collections::HashSet<String> = arms
+                            .iter()
+                            .filter_map(|(p, _)| match p {
+                                MatchPat::EnumDestructure { variant, .. } => Some(variant.clone()),
+                                MatchPat::Expr(Expr::PathConst { member, .. }) => {
+                                    Some(member.clone())
+                                }
+                                _ => None,
+                            })
+                            .collect();
+                        // Check if any variant is missing via `prog.enums`? We can pass `enums` or check in `check_diagnostics`
+                        let _ = (target, en, covered);
+                    }
+                }
+                for (pat, body) in arms {
+                    if let MatchPat::EnumDestructure { bindings, .. } = pat {
+                        for b in bindings {
+                            mut_vars.insert(b.clone(), false);
+                        }
+                    }
+                    check_stmts_mut(src, body, mut_vars, errors);
+                }
+            }
+            Stmt::Select { arms, timeout } => {
+                for arm in arms {
+                    mut_vars.insert(arm.bind_var.clone(), false);
+                    check_stmts_mut(src, &arm.body, mut_vars, errors);
+                }
+                if let Some((_, t_body)) = timeout {
+                    check_stmts_mut(src, t_body, mut_vars, errors);
+                }
             }
             Stmt::ForEach {
                 var, is_mut, body, ..

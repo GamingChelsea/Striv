@@ -82,6 +82,19 @@ enum VarInfo {
         struct_name: String,
         is_mut: bool,
     },
+    SharedStruct {
+        box_var: Variable,
+        struct_name: String,
+    },
+    EnumVal {
+        slot: StackSlot,
+        enum_name: String,
+        is_mut: bool,
+    },
+    EnumPtr {
+        ptr_var: Variable,
+        enum_name: String,
+    },
 }
 
 struct CompileEnv<'a> {
@@ -109,8 +122,23 @@ struct CompileEnv<'a> {
     svec_get_ptr_ref: cranelift::codegen::ir::FuncRef,
     svec_len_ref: cranelift::codegen::ir::FuncRef,
     svec_clear_ref: cranelift::codegen::ir::FuncRef,
+    group_begin_ref: cranelift::codegen::ir::FuncRef,
+    group_spawn_ref: cranelift::codegen::ir::FuncRef,
+    group_wait_ref: cranelift::codegen::ir::FuncRef,
+    active_group: Option<Value>,
+    shared_new_ref: cranelift::codegen::ir::FuncRef,
+    shared_lock_ref: cranelift::codegen::ir::FuncRef,
+    shared_unlock_ref: cranelift::codegen::ir::FuncRef,
+    active_locks: Vec<Value>,
+    par_for_svec_ref: cranelift::codegen::ir::FuncRef,
+    par_for_vec_ref: cranelift::codegen::ir::FuncRef,
+    select_recv_ref: cranelift::codegen::ir::FuncRef,
+    par_helpers: &'a HashMap<String, (String, Vec<String>)>,
+    current_fn: &'a str,
+    deferred: Vec<Stmt>,
     literals: &'a mut Vec<Box<[u8]>>,
     user_enums: &'a HashMap<String, i64>,
+    enum_defs: &'a HashMap<String, striv_syntax::EnumDef>,
     structs: &'a HashMap<String, Box<StructDef>>,
     funcs: HashMap<String, (cranelift::codegen::ir::FuncRef, Vec<(String, bool)>)>,
 }
@@ -168,11 +196,63 @@ impl JitCompiler {
         builder.symbol("striv_vec_len", lang_runtime::striv_vec_len as *const u8);
         builder.symbol("striv_vec_free", lang_runtime::striv_vec_free as *const u8);
         builder.symbol("striv_svec_new", lang_runtime::striv_svec_new as *const u8);
-        builder.symbol("striv_svec_push", lang_runtime::striv_svec_push as *const u8);
-        builder.symbol("striv_svec_get_ptr", lang_runtime::striv_svec_get_ptr as *const u8);
+        builder.symbol(
+            "striv_svec_push",
+            lang_runtime::striv_svec_push as *const u8,
+        );
+        builder.symbol(
+            "striv_svec_get_ptr",
+            lang_runtime::striv_svec_get_ptr as *const u8,
+        );
         builder.symbol("striv_svec_len", lang_runtime::striv_svec_len as *const u8);
-        builder.symbol("striv_svec_clear", lang_runtime::striv_svec_clear as *const u8);
-        builder.symbol("striv_svec_free", lang_runtime::striv_svec_free as *const u8);
+        builder.symbol(
+            "striv_svec_clear",
+            lang_runtime::striv_svec_clear as *const u8,
+        );
+        builder.symbol(
+            "striv_svec_free",
+            lang_runtime::striv_svec_free as *const u8,
+        );
+        builder.symbol(
+            "striv_group_begin",
+            lang_runtime::striv_group_begin as *const u8,
+        );
+        builder.symbol(
+            "striv_group_spawn",
+            lang_runtime::striv_group_spawn as *const u8,
+        );
+        builder.symbol(
+            "striv_group_wait",
+            lang_runtime::striv_group_wait as *const u8,
+        );
+        builder.symbol(
+            "striv_shared_new",
+            lang_runtime::striv_shared_new as *const u8,
+        );
+        builder.symbol(
+            "striv_shared_lock",
+            lang_runtime::striv_shared_lock as *const u8,
+        );
+        builder.symbol(
+            "striv_shared_unlock",
+            lang_runtime::striv_shared_unlock as *const u8,
+        );
+        builder.symbol(
+            "striv_shared_free",
+            lang_runtime::striv_shared_free as *const u8,
+        );
+        builder.symbol(
+            "striv_par_for_svec",
+            lang_runtime::striv_par_for_svec as *const u8,
+        );
+        builder.symbol(
+            "striv_par_for_vec",
+            lang_runtime::striv_par_for_vec as *const u8,
+        );
+        builder.symbol(
+            "striv_select_recv",
+            lang_runtime::striv_select_recv as *const u8,
+        );
         builder.symbol("striv_set_err", lang_runtime::striv_set_err as *const u8);
         builder.symbol("striv_take_err", lang_runtime::striv_take_err as *const u8);
         for &(_, c_sym, ptr, _) in lang_runtime::generated_bridge::exported_symbols() {
@@ -331,6 +411,53 @@ impl JitCompiler {
             .module
             .declare_function("striv_svec_clear", Linkage::Import, &sig_tweak_str)
             .unwrap();
+        let group_begin_id = self
+            .module
+            .declare_function("striv_group_begin", Linkage::Import, &sig_vec_new)
+            .unwrap();
+        let mut sig_gspawn = self.module.make_signature();
+        for _ in 0..4 {
+            sig_gspawn.params.push(AbiParam::new(int_ty));
+        }
+        let group_spawn_id = self
+            .module
+            .declare_function("striv_group_spawn", Linkage::Import, &sig_gspawn)
+            .unwrap();
+        let mut sig_gwait = self.module.make_signature();
+        sig_gwait.params.push(AbiParam::new(int_ty));
+        let group_wait_id = self
+            .module
+            .declare_function("striv_group_wait", Linkage::Import, &sig_gwait)
+            .unwrap();
+        let shared_new_id = self
+            .module
+            .declare_function("striv_shared_new", Linkage::Import, &sig_push)
+            .unwrap();
+        let shared_lock_id = self
+            .module
+            .declare_function("striv_shared_lock", Linkage::Import, &sig_tweak_str)
+            .unwrap();
+        let shared_unlock_id = self
+            .module
+            .declare_function("striv_shared_unlock", Linkage::Import, &sig_gwait)
+            .unwrap();
+        let par_for_svec_id = self
+            .module
+            .declare_function("striv_par_for_svec", Linkage::Import, &sig_gspawn)
+            .unwrap();
+        let par_for_vec_id = self
+            .module
+            .declare_function("striv_par_for_vec", Linkage::Import, &sig_gspawn)
+            .unwrap();
+        let mut sig_sel = self.module.make_signature();
+        for _ in 0..4 {
+            sig_sel.params.push(AbiParam::new(int_ty));
+        }
+        sig_sel.returns.push(AbiParam::new(int_ty));
+        let select_recv_id = self
+            .module
+            .declare_function("striv_select_recv", Linkage::Import, &sig_sel)
+            .unwrap();
 
         let set_err_id = self
             .module
@@ -344,9 +471,11 @@ impl JitCompiler {
             .unwrap();
 
         let mut user_enums = HashMap::new();
+        let mut enum_defs = HashMap::new();
         for e in &prog.enums {
+            enum_defs.insert(e.name.clone(), e.clone());
             for (idx, v) in e.variants.iter().enumerate() {
-                user_enums.insert(format!("{}__{}", e.name, v), idx as i64);
+                user_enums.insert(format!("{}__{}", e.name, v.name), idx as i64);
             }
         }
         if !prog.consts.is_empty() {
@@ -355,15 +484,23 @@ impl JitCompiler {
             }
         }
 
+        let expanded_funcs = expand_trailing_blocks(&prog.functions);
+        let (all_functions, par_helpers) = extract_parallel_bodies(&expanded_funcs);
+
         // 1. Pre-register all functions so they can call each other
         let mut func_ids = Vec::new();
-        for func in &prog.functions {
+        for func in &all_functions {
             let mut sig = self.module.make_signature();
             for (_, p_ty, _) in &func.params {
                 let abi_ty = if p_ty == "float" { types::F64 } else { int_ty };
                 sig.params.push(AbiParam::new(abi_ty)); // Integer, float, or 8-byte struct pointer
             }
-            sig.returns.push(AbiParam::new(int_ty));
+            let ret_ty = if func.ret_type.as_deref() == Some("float") {
+                types::F64
+            } else {
+                int_ty
+            };
+            sig.returns.push(AbiParam::new(ret_ty));
             let id = self
                 .module
                 .declare_function(&func.name, Linkage::Export, &sig)
@@ -373,13 +510,18 @@ impl JitCompiler {
 
         // 2. Compile each function with Cranelift
         let mut func_ctx = FunctionBuilderContext::new();
-        for (i, func) in prog.functions.iter().enumerate() {
+        for (i, func) in all_functions.iter().enumerate() {
             let mut ctx = self.module.make_context();
             for (_, p_ty, _) in &func.params {
                 let abi_ty = if p_ty == "float" { types::F64 } else { int_ty };
                 ctx.func.signature.params.push(AbiParam::new(abi_ty));
             }
-            ctx.func.signature.returns.push(AbiParam::new(int_ty));
+            let ret_ty = if func.ret_type.as_deref() == Some("float") {
+                types::F64
+            } else {
+                int_ty
+            };
+            ctx.func.signature.returns.push(AbiParam::new(ret_ty));
 
             {
                 let mut builder = FunctionBuilder::new(&mut ctx.func, &mut func_ctx);
@@ -389,7 +531,7 @@ impl JitCompiler {
                 builder.seal_block(entry);
 
                 let mut funcs_map = HashMap::new();
-                for (j, f) in prog.functions.iter().enumerate() {
+                for (j, f) in all_functions.iter().enumerate() {
                     let f_ref = self.module.declare_func_in_func(func_ids[j], builder.func);
                     let param_meta = f.params.iter().map(|(_, ty, m)| (ty.clone(), *m)).collect();
                     funcs_map.insert(f.name.clone(), (f_ref, param_meta));
@@ -499,9 +641,44 @@ impl JitCompiler {
                         .module
                         .declare_func_in_func(svec_get_ptr_id, builder.func),
                     svec_len_ref: self.module.declare_func_in_func(svec_len_id, builder.func),
-                    svec_clear_ref: self.module.declare_func_in_func(svec_clear_id, builder.func),
+                    svec_clear_ref: self
+                        .module
+                        .declare_func_in_func(svec_clear_id, builder.func),
+                    group_begin_ref: self
+                        .module
+                        .declare_func_in_func(group_begin_id, builder.func),
+                    group_spawn_ref: self
+                        .module
+                        .declare_func_in_func(group_spawn_id, builder.func),
+                    group_wait_ref: self
+                        .module
+                        .declare_func_in_func(group_wait_id, builder.func),
+                    active_group: None,
+                    shared_new_ref: self
+                        .module
+                        .declare_func_in_func(shared_new_id, builder.func),
+                    shared_lock_ref: self
+                        .module
+                        .declare_func_in_func(shared_lock_id, builder.func),
+                    shared_unlock_ref: self
+                        .module
+                        .declare_func_in_func(shared_unlock_id, builder.func),
+                    active_locks: Vec::new(),
+                    par_for_svec_ref: self
+                        .module
+                        .declare_func_in_func(par_for_svec_id, builder.func),
+                    par_for_vec_ref: self
+                        .module
+                        .declare_func_in_func(par_for_vec_id, builder.func),
+                    select_recv_ref: self
+                        .module
+                        .declare_func_in_func(select_recv_id, builder.func),
+                    par_helpers: &par_helpers,
+                    current_fn: &func.name,
+                    deferred: Vec::new(),
                     literals: &mut self.kept_literals,
                     user_enums: &user_enums,
+                    enum_defs: &enum_defs,
                     structs: &self.kept_structs,
                     funcs: funcs_map,
                 };
@@ -524,8 +701,17 @@ impl JitCompiler {
                                 is_mut: *is_mut,
                             },
                         );
-                    } else if let Some(inner_s) =
-                        ty_name.strip_prefix("Vec<").and_then(|s| s.strip_suffix('>'))
+                    } else if let Some(s_name) = ty_name.strip_prefix("shared:") {
+                        vars.insert(
+                            name.clone(),
+                            VarInfo::SharedStruct {
+                                box_var: var,
+                                struct_name: s_name.to_string(),
+                            },
+                        );
+                    } else if let Some(inner_s) = ty_name
+                        .strip_prefix("Vec<")
+                        .and_then(|s| s.strip_suffix('>'))
                     {
                         vars.insert(
                             name.clone(),
@@ -549,6 +735,30 @@ impl JitCompiler {
                             VarInfo::Float {
                                 var,
                                 is_mut: *is_mut,
+                            },
+                        );
+                    } else if lang_runtime::std_drop_symbols()
+                        .iter()
+                        .any(|(n, _)| *n == ty_name)
+                    {
+                        vars.insert(
+                            name.clone(),
+                            VarInfo::Handle {
+                                var,
+                                type_name: ty_name.clone(),
+                                is_mut: *is_mut,
+                            },
+                        );
+                    } else if enum_defs
+                        .get(ty_name)
+                        .map(|ed| ed.variants.iter().any(|v| !v.field_types.is_empty()))
+                        .unwrap_or(false)
+                    {
+                        vars.insert(
+                            name.clone(),
+                            VarInfo::EnumPtr {
+                                ptr_var: var,
+                                enum_name: ty_name.clone(),
                             },
                         );
                     } else if self.kept_structs.contains_key(ty_name) {
@@ -604,6 +814,17 @@ impl JitCompiler {
                     }
                 }
                 if !terminated {
+                    let to_run: Vec<Stmt> = env.deferred.drain(..).rev().collect();
+                    for d_stmt in &to_run {
+                        compile_stmt(
+                            d_stmt,
+                            &mut builder,
+                            &mut vars,
+                            &mut env,
+                            &mut owned_strings,
+                            &mut owned_vecs,
+                        );
+                    }
                     for s_var in &owned_strings {
                         let ptr = builder.use_var(*s_var);
                         builder.ins().call(env.str_free_ref, &[ptr]);
@@ -623,8 +844,7 @@ impl JitCompiler {
         }
 
         self.module.finalize_definitions().unwrap();
-        let entry_idx = prog
-            .functions
+        let entry_idx = all_functions
             .iter()
             .position(|f| f.name == "main")
             .unwrap_or(func_ids.len() - 1);
@@ -730,6 +950,14 @@ fn compile_call(
                     arg_vals.push(builder.use_var(*ptr_var));
                     continue;
                 }
+                Some(VarInfo::EnumVal { slot, .. }) => {
+                    arg_vals.push(builder.ins().stack_addr(env.int_ty, *slot, 0));
+                    continue;
+                }
+                Some(VarInfo::EnumPtr { ptr_var, .. }) => {
+                    arg_vals.push(builder.use_var(*ptr_var));
+                    continue;
+                }
                 _ => {}
             }
         }
@@ -771,7 +999,11 @@ fn compile_method_call(
                 builder.inst_results(c)[0]
             }
             "clear" => {
-                assert!(is_mut, "Error: '{}' must be `mut` for `.clear()`!", receiver);
+                assert!(
+                    is_mut,
+                    "Error: '{}' must be `mut` for `.clear()`!",
+                    receiver
+                );
                 let c = builder.ins().call(env.svec_clear_ref, &[vec_ptr]);
                 builder.inst_results(c)[0]
             }
@@ -1053,6 +1285,80 @@ fn compile_stmt(
                         is_mut: *is_mut,
                     },
                 );
+            } else if let Expr::Call {
+                name: fn_name,
+                args,
+            } = value
+                && let Some((en, vn)) = fn_name.split_once("__")
+                && let Some(ed) = env.enum_defs.get(en).cloned()
+                && let Some((tag_idx, variant)) =
+                    ed.variants.iter().enumerate().find(|(_, v)| v.name == vn)
+            {
+                let max_fields = ed
+                    .variants
+                    .iter()
+                    .map(|v| v.field_types.len())
+                    .max()
+                    .unwrap_or(0);
+                let slot = builder.create_sized_stack_slot(StackSlotData::new(
+                    StackSlotKind::ExplicitSlot,
+                    ((1 + max_fields) * 8) as u32,
+                    3,
+                ));
+                let tag_val = builder.ins().iconst(env.int_ty, tag_idx as i64);
+                builder.ins().stack_store(env.int_ty, tag_val, slot, 0);
+                for (idx, arg) in args.iter().enumerate() {
+                    let mut v = compile_expr(arg, builder, vars, env);
+                    if variant
+                        .field_types
+                        .get(idx)
+                        .map(|t| t == "float")
+                        .unwrap_or(false)
+                    {
+                        v = to_f64(v, builder);
+                    }
+                    builder
+                        .ins()
+                        .stack_store(env.int_ty, v, slot, ((idx + 1) * 8) as i32);
+                }
+                vars.insert(
+                    name.clone(),
+                    VarInfo::EnumVal {
+                        slot,
+                        enum_name: en.to_string(),
+                        is_mut: *is_mut,
+                    },
+                );
+            } else if let Expr::PathConst { ty, member } = value
+                && let Some(ed) = env.enum_defs.get(ty).cloned()
+                && ed.variants.iter().any(|v| !v.field_types.is_empty())
+                && let Some((tag_idx, _)) = ed
+                    .variants
+                    .iter()
+                    .enumerate()
+                    .find(|(_, v)| &v.name == member)
+            {
+                let max_fields = ed
+                    .variants
+                    .iter()
+                    .map(|v| v.field_types.len())
+                    .max()
+                    .unwrap_or(0);
+                let slot = builder.create_sized_stack_slot(StackSlotData::new(
+                    StackSlotKind::ExplicitSlot,
+                    ((1 + max_fields) * 8) as u32,
+                    3,
+                ));
+                let tag_val = builder.ins().iconst(env.int_ty, tag_idx as i64);
+                builder.ins().stack_store(env.int_ty, tag_val, slot, 0);
+                vars.insert(
+                    name.clone(),
+                    VarInfo::EnumVal {
+                        slot,
+                        enum_name: ty.clone(),
+                        is_mut: *is_mut,
+                    },
+                );
             } else if matches!(value, Expr::Call { name, .. } if name.contains("__")) {
                 let Expr::Call { name: fn_name, .. } = value else {
                     unreachable!()
@@ -1275,7 +1581,32 @@ fn compile_stmt(
             false
         }
         Stmt::Match { target, arms } => {
-            let target_val = compile_expr(target, builder, vars, env);
+            let (target_val, enum_slot_or_ptr) = if let Expr::Var(vn) = target {
+                match vars.get(vn) {
+                    Some(VarInfo::EnumVal { slot, .. }) => {
+                        let tag = builder.ins().stack_load(env.int_ty, env.int_ty, *slot, 0);
+                        (tag, Some((*slot, None)))
+                    }
+                    Some(VarInfo::EnumPtr { ptr_var, .. }) => {
+                        let ptr = builder.use_var(*ptr_var);
+                        let tag = builder.ins().load(env.int_ty, MemFlagsData::new(), ptr, 0);
+                        (
+                            tag,
+                            Some((
+                                builder.create_sized_stack_slot(StackSlotData::new(
+                                    StackSlotKind::ExplicitSlot,
+                                    8,
+                                    3,
+                                )),
+                                Some(ptr),
+                            )),
+                        )
+                    }
+                    _ => (compile_expr(target, builder, vars, env), None),
+                }
+            } else {
+                (compile_expr(target, builder, vars, env), None)
+            };
             let exit_bb = builder.create_block();
 
             for (pat, body) in arms {
@@ -1306,6 +1637,86 @@ fn compile_stmt(
 
                         builder.switch_to_block(arm_bb);
                         builder.seal_block(arm_bb);
+                        let mut ret = false;
+                        for s in body {
+                            if compile_stmt(s, builder, vars, env, owned_strings, owned_vecs) {
+                                ret = true;
+                                break;
+                            }
+                        }
+                        if !ret {
+                            builder.ins().jump(exit_bb, &[]);
+                        }
+
+                        builder.switch_to_block(next_bb);
+                        builder.seal_block(next_bb);
+                    }
+                    striv_syntax::MatchPat::EnumDestructure {
+                        enum_name,
+                        variant,
+                        bindings,
+                    } => {
+                        let ed = env
+                            .enum_defs
+                            .get(enum_name)
+                            .unwrap_or_else(|| panic!("Unknown enum '{}'", enum_name))
+                            .clone();
+                        let (tag_idx, ev) = ed
+                            .variants
+                            .iter()
+                            .enumerate()
+                            .find(|(_, v)| &v.name == variant)
+                            .unwrap_or_else(|| {
+                                panic!("Unknown variant '{}::{}'", enum_name, variant)
+                            });
+
+                        let cond =
+                            builder
+                                .ins()
+                                .icmp_imm_s(IntCC::Equal, target_val, tag_idx as i64);
+                        let arm_bb = builder.create_block();
+                        let next_bb = builder.create_block();
+                        builder.ins().brif(cond, arm_bb, &[], next_bb, &[]);
+
+                        builder.switch_to_block(arm_bb);
+                        builder.seal_block(arm_bb);
+
+                        if let Some((slot, ptr_opt)) = enum_slot_or_ptr {
+                            for (idx, b_name) in bindings.iter().enumerate() {
+                                let is_f = ev
+                                    .field_types
+                                    .get(idx)
+                                    .map(|t| t == "float")
+                                    .unwrap_or(false);
+                                let ty = if is_f { types::F64 } else { env.int_ty };
+                                let off = ((idx + 1) * 8) as i32;
+                                let val = if let Some(ptr) = ptr_opt {
+                                    builder.ins().load(ty, MemFlagsData::new(), ptr, off)
+                                } else {
+                                    builder.ins().stack_load(env.int_ty, ty, slot, off)
+                                };
+                                let v_var = builder.declare_var(ty);
+                                builder.def_var(v_var, val);
+                                if is_f {
+                                    vars.insert(
+                                        b_name.clone(),
+                                        VarInfo::Float {
+                                            var: v_var,
+                                            is_mut: false,
+                                        },
+                                    );
+                                } else {
+                                    vars.insert(
+                                        b_name.clone(),
+                                        VarInfo::Int {
+                                            var: v_var,
+                                            is_mut: false,
+                                        },
+                                    );
+                                }
+                            }
+                        }
+
                         let mut ret = false;
                         for s in body {
                             if compile_stmt(s, builder, vars, env, owned_strings, owned_vecs) {
@@ -1376,12 +1787,326 @@ fn compile_stmt(
             };
             compile_stmt(&desugared, builder, vars, env, owned_strings, owned_vecs)
         }
+        Stmt::Defer(inner) => {
+            env.deferred.push((**inner).clone());
+            false
+        }
+        Stmt::Block(stmts) => {
+            for s in stmts {
+                if compile_stmt(s, builder, vars, env, owned_strings, owned_vecs) {
+                    return true;
+                }
+            }
+            false
+        }
+        Stmt::Yield | Stmt::BlockCall { .. } => false,
+        Stmt::Select { arms, timeout } => {
+            let chans_slot = builder.create_sized_stack_slot(StackSlotData::new(
+                StackSlotKind::ExplicitSlot,
+                (arms.len().max(1) * 8) as u32,
+                3,
+            ));
+            let val_slot = builder.create_sized_stack_slot(StackSlotData::new(
+                StackSlotKind::ExplicitSlot,
+                8,
+                3,
+            ));
+            for (i, arm) in arms.iter().enumerate() {
+                let ch_ptr = compile_expr(&Expr::Var(arm.channel_var.clone()), builder, vars, env);
+                builder
+                    .ins()
+                    .stack_store(env.int_ty, ch_ptr, chans_slot, (i * 8) as i32);
+            }
+            let timeout_val = if let Some((ms_expr, _)) = timeout {
+                compile_expr(ms_expr, builder, vars, env)
+            } else {
+                builder.ins().iconst(env.int_ty, -1)
+            };
+            let chans_addr = builder.ins().stack_addr(env.int_ty, chans_slot, 0);
+            let out_val_addr = builder.ins().stack_addr(env.int_ty, val_slot, 0);
+            let count_val = builder.ins().iconst(env.int_ty, arms.len() as i64);
+
+            let call = builder.ins().call(
+                env.select_recv_ref,
+                &[chans_addr, count_val, timeout_val, out_val_addr],
+            );
+            let winner_idx = builder.inst_results(call)[0];
+            let recv_val = builder
+                .ins()
+                .stack_load(env.int_ty, env.int_ty, val_slot, 0);
+
+            let exit_bb = builder.create_block();
+            for (i, arm) in arms.iter().enumerate() {
+                let is_win = builder.ins().icmp_imm_s(IntCC::Equal, winner_idx, i as i64);
+                let arm_bb = builder.create_block();
+                let next_bb = builder.create_block();
+                builder.ins().brif(is_win, arm_bb, &[], next_bb, &[]);
+
+                builder.switch_to_block(arm_bb);
+                builder.seal_block(arm_bb);
+
+                let v_var = builder.declare_var(env.int_ty);
+                builder.def_var(v_var, recv_val);
+                vars.insert(
+                    arm.bind_var.clone(),
+                    VarInfo::Int {
+                        var: v_var,
+                        is_mut: false,
+                    },
+                );
+
+                let mut ret = false;
+                for s in &arm.body {
+                    if compile_stmt(s, builder, vars, env, owned_strings, owned_vecs) {
+                        ret = true;
+                        break;
+                    }
+                }
+                if !ret {
+                    builder.ins().jump(exit_bb, &[]);
+                }
+
+                builder.switch_to_block(next_bb);
+                builder.seal_block(next_bb);
+            }
+
+            if let Some((_, t_body)) = timeout {
+                let mut ret = false;
+                for s in t_body {
+                    if compile_stmt(s, builder, vars, env, owned_strings, owned_vecs) {
+                        ret = true;
+                        break;
+                    }
+                }
+                if !ret {
+                    builder.ins().jump(exit_bb, &[]);
+                }
+            } else {
+                builder.ins().jump(exit_bb, &[]);
+            }
+
+            builder.switch_to_block(exit_bb);
+            builder.seal_block(exit_bb);
+            false
+        }
+        Stmt::Shared { name, value } => {
+            let Expr::StructInit {
+                name: s_name,
+                fields,
+            } = value
+            else {
+                panic!("`shared {}` requires a struct initializer", name);
+            };
+            let def = env
+                .structs
+                .get(s_name)
+                .unwrap_or_else(|| panic!("Unknown struct: {}", s_name))
+                .clone();
+            let byte_size = (def.fields.len() * 8) as u32;
+            let tmp_slot = builder.create_sized_stack_slot(StackSlotData::new(
+                StackSlotKind::ExplicitSlot,
+                byte_size,
+                3,
+            ));
+            for (f_name, f_expr) in fields {
+                let mut val = compile_expr(f_expr, builder, vars, env);
+                if field_is_float(&def, f_name) {
+                    val = to_f64(val, builder);
+                }
+                let off = field_offset(&def, f_name);
+                builder.ins().stack_store(env.int_ty, val, tmp_slot, off);
+            }
+            let src_addr = builder.ins().stack_addr(env.int_ty, tmp_slot, 0);
+            let size_val = builder.ins().iconst(env.int_ty, byte_size as i64);
+            let call = builder
+                .ins()
+                .call(env.shared_new_ref, &[src_addr, size_val]);
+            let box_ptr = builder.inst_results(call)[0];
+            let box_var = builder.declare_var(env.int_ty);
+            builder.def_var(box_var, box_ptr);
+            vars.insert(
+                name.clone(),
+                VarInfo::SharedStruct {
+                    box_var,
+                    struct_name: s_name.clone(),
+                },
+            );
+            false
+        }
+        Stmt::Lock { var, body } => {
+            let Some(VarInfo::SharedStruct {
+                box_var,
+                struct_name,
+            }) = vars.get(var).cloned()
+            else {
+                panic!("`lock` can only be used on a `shared` variable ('{}')", var);
+            };
+            let box_ptr = builder.use_var(box_var);
+            let c_lock = builder.ins().call(env.shared_lock_ref, &[box_ptr]);
+            let data_ptr = builder.inst_results(c_lock)[0];
+            let ptr_var = builder.declare_var(env.int_ty);
+            builder.def_var(ptr_var, data_ptr);
+
+            let saved_info = vars.insert(
+                var.clone(),
+                VarInfo::StructPtr {
+                    ptr_var,
+                    struct_name,
+                    is_mut: true,
+                },
+            );
+            env.active_locks.push(box_ptr);
+
+            let mut body_ret = false;
+            for s in body {
+                if compile_stmt(s, builder, vars, env, owned_strings, owned_vecs) {
+                    body_ret = true;
+                    break;
+                }
+            }
+
+            env.active_locks.pop();
+            if let Some(prev) = saved_info {
+                vars.insert(var.clone(), prev);
+            }
+            if !body_ret {
+                builder.ins().call(env.shared_unlock_ref, &[box_ptr]);
+            }
+            false
+        }
+        Stmt::Concurrent(body) => {
+            let prev_group = env.active_group;
+            let c_begin = builder.ins().call(env.group_begin_ref, &[]);
+            let group_ptr = builder.inst_results(c_begin)[0];
+            env.active_group = Some(group_ptr);
+
+            for s in body {
+                compile_stmt(s, builder, vars, env, owned_strings, owned_vecs);
+            }
+
+            builder.ins().call(env.group_wait_ref, &[group_ptr]);
+            env.active_group = prev_group;
+            false
+        }
+        Stmt::Spawn { name, args } => {
+            let group_ptr = env
+                .active_group
+                .expect("`spawn` must be inside a `concurrent { ... }` block!");
+            let (func_ref, param_meta) = env
+                .funcs
+                .get(name)
+                .cloned()
+                .unwrap_or_else(|| panic!("Unknown function in `spawn`: {}", name));
+            assert_eq!(
+                args.len(),
+                param_meta.len(),
+                "Wrong argument count for `spawn {}`",
+                name
+            );
+
+            for (ty, is_mut) in &param_meta {
+                if *is_mut && env.structs.contains_key(ty) {
+                    panic!(
+                        "Data-race guard: `spawn {}` cannot take unprotected `mut {}` (use `Channel` or `Atomic`)",
+                        name, ty
+                    );
+                }
+            }
+
+            let slot = builder.create_sized_stack_slot(StackSlotData::new(
+                StackSlotKind::ExplicitSlot,
+                (args.len().max(1) * 8) as u32,
+                3,
+            ));
+            for (i, arg) in args.iter().enumerate() {
+                let v = compile_expr(arg, builder, vars, env);
+                builder
+                    .ins()
+                    .stack_store(env.int_ty, v, slot, (i * 8) as i32);
+            }
+
+            let fn_addr = builder.ins().func_addr(env.int_ty, func_ref);
+            let args_ptr = builder.ins().stack_addr(env.int_ty, slot, 0);
+            let count_val = builder.ins().iconst(env.int_ty, args.len() as i64);
+            builder.ins().call(
+                env.group_spawn_ref,
+                &[group_ptr, fn_addr, args_ptr, count_val],
+            );
+            false
+        }
         Stmt::ForEach {
             var,
             is_mut,
+            is_parallel,
             collection,
             body,
         } => {
+            if *is_parallel {
+                let key = format!("{}:{}:{}", env.current_fn, collection, var);
+                let (helper_name, captures) = env
+                    .par_helpers
+                    .get(&key)
+                    .cloned()
+                    .unwrap_or_else(|| panic!("Missing parallel helper for {}", key));
+                let (helper_ref, _) = env
+                    .funcs
+                    .get(&helper_name)
+                    .cloned()
+                    .unwrap_or_else(|| panic!("Missing helper func {}", helper_name));
+
+                let coll_info = vars
+                    .get(collection)
+                    .cloned()
+                    .unwrap_or_else(|| panic!("Unknown list '{}' in `parallel for`", collection));
+                let (vec_ptr, is_svec) = match &coll_info {
+                    VarInfo::StructVec {
+                        var: v_var,
+                        is_mut: coll_mut,
+                        ..
+                    } => {
+                        if *is_mut {
+                            assert!(
+                                *coll_mut,
+                                "Error: list '{}' must be `mut` for `parallel for mut {}`!",
+                                collection, var
+                            );
+                        }
+                        (builder.use_var(*v_var), true)
+                    }
+                    VarInfo::Vec { var: v_var, .. } => (builder.use_var(*v_var), false),
+                    _ => panic!("'{}' is not an iterable Vec list!", collection),
+                };
+
+                let cap_slot = builder.create_sized_stack_slot(StackSlotData::new(
+                    StackSlotKind::ExplicitSlot,
+                    (captures.len().max(1) * 8) as u32,
+                    3,
+                ));
+                for (i, cap_name) in captures.iter().enumerate() {
+                    let v = compile_expr(&Expr::Var(cap_name.clone()), builder, vars, env);
+                    let v_i64 = if builder.func.dfg.value_type(v) == types::F64 {
+                        builder.ins().bitcast(env.int_ty, MemFlagsData::new(), v)
+                    } else {
+                        v
+                    };
+                    builder
+                        .ins()
+                        .stack_store(env.int_ty, v_i64, cap_slot, (i * 8) as i32);
+                }
+
+                let fn_addr = builder.ins().func_addr(env.int_ty, helper_ref);
+                let caps_ptr = builder.ins().stack_addr(env.int_ty, cap_slot, 0);
+                let cap_count = builder.ins().iconst(env.int_ty, captures.len() as i64);
+                let runner = if is_svec {
+                    env.par_for_svec_ref
+                } else {
+                    env.par_for_vec_ref
+                };
+                builder
+                    .ins()
+                    .call(runner, &[vec_ptr, fn_addr, caps_ptr, cap_count]);
+                return false;
+            }
             let coll_info = vars
                 .get(collection)
                 .cloned()
@@ -1533,6 +2258,13 @@ fn compile_stmt(
         }
         Stmt::Return(expr) => {
             let val = compile_expr(expr, builder, vars, env);
+            let to_run: Vec<Stmt> = env.deferred.drain(..).rev().collect();
+            for d_stmt in &to_run {
+                compile_stmt(d_stmt, builder, vars, env, owned_strings, owned_vecs);
+            }
+            for lp in env.active_locks.iter().rev() {
+                builder.ins().call(env.shared_unlock_ref, &[*lp]);
+            }
             for s_var in owned_strings.iter() {
                 let ptr = builder.use_var(*s_var);
                 builder.ins().call(env.str_free_ref, &[ptr]);
@@ -1703,6 +2435,7 @@ fn compile_expr(
             | Some(VarInfo::Str { var, .. })
             | Some(VarInfo::Vec { var, .. })
             | Some(VarInfo::Handle { var, .. }) => builder.use_var(*var),
+            Some(VarInfo::SharedStruct { box_var, .. }) => builder.use_var(*box_var),
             Some(VarInfo::Tweak { addr }) => {
                 let ptr_val = builder.ins().iconst(env.int_ty, *addr);
                 builder
@@ -1864,6 +2597,365 @@ fn compile_expr(
             method,
             args,
         } => compile_method_call(receiver, method, args, builder, vars, env),
+    }
+}
+
+fn expand_trailing_blocks(funcs: &[striv_syntax::Function]) -> Vec<striv_syntax::Function> {
+    let mut templates: HashMap<String, striv_syntax::Function> = HashMap::new();
+    let mut normal = Vec::new();
+    for f in funcs {
+        if f.params
+            .last()
+            .map(|(_, ty, _)| ty == "block")
+            .unwrap_or(false)
+        {
+            templates.insert(f.name.clone(), f.clone());
+        } else {
+            normal.push(f.clone());
+        }
+    }
+    for f in &mut normal {
+        f.body = expand_stmts(&f.body, &templates);
+    }
+    normal
+}
+
+fn expand_stmts(stmts: &[Stmt], templates: &HashMap<String, striv_syntax::Function>) -> Vec<Stmt> {
+    let mut out = Vec::new();
+    for stmt in stmts {
+        match stmt {
+            Stmt::BlockCall { name, args, body } => {
+                let tpl = templates
+                    .get(name)
+                    .unwrap_or_else(|| panic!("Unknown block function '{}'", name));
+                let expanded_body = expand_stmts(body, templates);
+                let mut inlined = Vec::new();
+                for ((p_name, p_ty, _), arg_expr) in tpl.params.iter().zip(args.iter()) {
+                    if p_ty != "block" {
+                        inlined.push(Stmt::Let {
+                            name: p_name.clone(),
+                            ty_hint: Some(p_ty.clone()),
+                            is_mut: false,
+                            value: arg_expr.clone(),
+                        });
+                    }
+                }
+                let tpl_expanded = expand_stmts(&tpl.body, templates);
+                for s in replace_yield(&tpl_expanded, &expanded_body) {
+                    inlined.push(s);
+                }
+                out.push(Stmt::Block(inlined));
+            }
+            Stmt::If {
+                cond,
+                then_block,
+                else_block,
+            } => out.push(Stmt::If {
+                cond: cond.clone(),
+                then_block: expand_stmts(then_block, templates),
+                else_block: expand_stmts(else_block, templates),
+            }),
+            Stmt::While { cond, body } => out.push(Stmt::While {
+                cond: cond.clone(),
+                body: expand_stmts(body, templates),
+            }),
+            Stmt::ForRange {
+                var,
+                start,
+                end,
+                body,
+            } => out.push(Stmt::ForRange {
+                var: var.clone(),
+                start: start.clone(),
+                end: end.clone(),
+                body: expand_stmts(body, templates),
+            }),
+            Stmt::ForEach {
+                var,
+                is_mut,
+                is_parallel,
+                collection,
+                body,
+            } => out.push(Stmt::ForEach {
+                var: var.clone(),
+                is_mut: *is_mut,
+                is_parallel: *is_parallel,
+                collection: collection.clone(),
+                body: expand_stmts(body, templates),
+            }),
+            Stmt::Block(inner) => out.push(Stmt::Block(expand_stmts(inner, templates))),
+            other => out.push(other.clone()),
+        }
+    }
+    out
+}
+
+fn replace_yield(stmts: &[Stmt], replacement: &[Stmt]) -> Vec<Stmt> {
+    let mut out = Vec::new();
+    for stmt in stmts {
+        match stmt {
+            Stmt::Yield => out.push(Stmt::Block(replacement.to_vec())),
+            Stmt::If {
+                cond,
+                then_block,
+                else_block,
+            } => out.push(Stmt::If {
+                cond: cond.clone(),
+                then_block: replace_yield(then_block, replacement),
+                else_block: replace_yield(else_block, replacement),
+            }),
+            Stmt::While { cond, body } => out.push(Stmt::While {
+                cond: cond.clone(),
+                body: replace_yield(body, replacement),
+            }),
+            Stmt::ForRange {
+                var,
+                start,
+                end,
+                body,
+            } => out.push(Stmt::ForRange {
+                var: var.clone(),
+                start: start.clone(),
+                end: end.clone(),
+                body: replace_yield(body, replacement),
+            }),
+            Stmt::Block(inner) => out.push(Stmt::Block(replace_yield(inner, replacement))),
+            other => out.push(other.clone()),
+        }
+    }
+    out
+}
+
+fn extract_parallel_bodies(
+    prog_funcs: &[striv_syntax::Function],
+) -> (
+    Vec<striv_syntax::Function>,
+    HashMap<String, (String, Vec<String>)>,
+) {
+    let mut out_funcs = prog_funcs.to_vec();
+    let mut helpers = HashMap::new();
+    let mut next_id = 0usize;
+
+    for func in prog_funcs {
+        let mut local_types: HashMap<String, (String, bool)> = HashMap::new();
+        for (p_name, p_ty, p_mut) in &func.params {
+            local_types.insert(p_name.clone(), (p_ty.clone(), *p_mut));
+        }
+        collect_parallel_in_stmts(
+            &func.name,
+            &func.body,
+            &mut local_types,
+            &mut out_funcs,
+            &mut helpers,
+            &mut next_id,
+        );
+    }
+
+    (out_funcs, helpers)
+}
+
+fn collect_parallel_in_stmts(
+    fn_name: &str,
+    stmts: &[Stmt],
+    local_types: &mut HashMap<String, (String, bool)>,
+    out_funcs: &mut Vec<striv_syntax::Function>,
+    helpers: &mut HashMap<String, (String, Vec<String>)>,
+    next_id: &mut usize,
+) {
+    for stmt in stmts {
+        match stmt {
+            Stmt::Let {
+                name,
+                ty_hint,
+                is_mut,
+                value,
+            } => {
+                let ty = if let Some(th) = ty_hint {
+                    th.clone()
+                } else {
+                    match value {
+                        Expr::Float(_) => "float".to_string(),
+                        Expr::StrInterp(_) => "String".to_string(),
+                        Expr::VecLit(_) => "Vec".to_string(),
+                        Expr::StructInit { name, .. } => name.clone(),
+                        Expr::Call { name, .. } if name.contains("__") => {
+                            name.split("__").next().unwrap_or("int").to_string()
+                        }
+                        _ => "int".to_string(),
+                    }
+                };
+                local_types.insert(name.clone(), (ty, *is_mut));
+            }
+            Stmt::Shared { name, value } => {
+                if let Expr::StructInit { name: s_name, .. } = value {
+                    local_types.insert(name.clone(), (format!("shared:{}", s_name), false));
+                }
+            }
+            Stmt::ForEach {
+                var,
+                is_mut,
+                is_parallel,
+                collection,
+                body,
+            } if *is_parallel => {
+                let elem_ty = local_types
+                    .get(collection)
+                    .and_then(|(t, _)| t.strip_prefix("Vec<").and_then(|s| s.strip_suffix('>')))
+                    .unwrap_or("int")
+                    .to_string();
+
+                let mut free_vars = Vec::new();
+                let mut inner_locals = std::collections::HashSet::new();
+                inner_locals.insert(var.clone());
+                collect_free_vars_in_stmts(body, &inner_locals, &mut free_vars);
+
+                let mut params = vec![(var.clone(), elem_ty, *is_mut)];
+                let mut cap_names = Vec::new();
+                for cap in free_vars {
+                    if let Some((cap_ty, cap_mut)) = local_types.get(&cap) {
+                        if *cap_mut && !cap_ty.starts_with("shared:") {
+                            panic!(
+                                "Data-race guard: outer `mut` variable '{}' cannot be captured in `parallel for` (use `Atomic` or `shared`)",
+                                cap
+                            );
+                        }
+                        params.push((cap.clone(), cap_ty.clone(), false));
+                        cap_names.push(cap);
+                    }
+                }
+
+                let helper_name = format!("__par_body_{}", *next_id);
+                *next_id += 1;
+                out_funcs.push(striv_syntax::Function {
+                    name: helper_name.clone(),
+                    params,
+                    ret_type: None,
+                    body: body.clone(),
+                });
+                helpers.insert(
+                    format!("{}:{}:{}", fn_name, collection, var),
+                    (helper_name, cap_names),
+                );
+            }
+            Stmt::If {
+                then_block,
+                else_block,
+                ..
+            } => {
+                collect_parallel_in_stmts(
+                    fn_name,
+                    then_block,
+                    local_types,
+                    out_funcs,
+                    helpers,
+                    next_id,
+                );
+                collect_parallel_in_stmts(
+                    fn_name,
+                    else_block,
+                    local_types,
+                    out_funcs,
+                    helpers,
+                    next_id,
+                );
+            }
+            Stmt::While { body, .. }
+            | Stmt::ForRange { body, .. }
+            | Stmt::ForEach { body, .. }
+            | Stmt::Concurrent(body)
+            | Stmt::Lock { body, .. } => {
+                collect_parallel_in_stmts(fn_name, body, local_types, out_funcs, helpers, next_id);
+            }
+            _ => {}
+        }
+    }
+}
+
+fn collect_free_vars_in_stmts(
+    stmts: &[Stmt],
+    bound: &std::collections::HashSet<String>,
+    out: &mut Vec<String>,
+) {
+    let mut local_bound = bound.clone();
+    for stmt in stmts {
+        match stmt {
+            Stmt::Let { name, value, .. } => {
+                collect_free_vars_in_expr(value, &local_bound, out);
+                local_bound.insert(name.clone());
+            }
+            Stmt::Assign { name, value }
+            | Stmt::FieldAssign {
+                var: name, value, ..
+            } => {
+                if !local_bound.contains(name) && !out.contains(name) {
+                    out.push(name.clone());
+                }
+                collect_free_vars_in_expr(value, &local_bound, out);
+            }
+            Stmt::CompoundAssign { value, .. } => {
+                collect_free_vars_in_expr(value, &local_bound, out);
+            }
+            Stmt::Lock { var, body } => {
+                if !local_bound.contains(var) && !out.contains(var) {
+                    out.push(var.clone());
+                }
+                collect_free_vars_in_stmts(body, &local_bound, out);
+            }
+            Stmt::If {
+                cond,
+                then_block,
+                else_block,
+            } => {
+                collect_free_vars_in_expr(cond, &local_bound, out);
+                collect_free_vars_in_stmts(then_block, &local_bound, out);
+                collect_free_vars_in_stmts(else_block, &local_bound, out);
+            }
+            Stmt::Print(e) | Stmt::Return(e) | Stmt::Expr(e) => {
+                collect_free_vars_in_expr(e, &local_bound, out);
+            }
+            Stmt::While { cond, body } => {
+                collect_free_vars_in_expr(cond, &local_bound, out);
+                collect_free_vars_in_stmts(body, &local_bound, out);
+            }
+            _ => {}
+        }
+    }
+}
+
+fn collect_free_vars_in_expr(
+    expr: &Expr,
+    bound: &std::collections::HashSet<String>,
+    out: &mut Vec<String>,
+) {
+    match expr {
+        Expr::Var(n) => {
+            if !bound.contains(n) && !out.contains(n) {
+                out.push(n.clone());
+            }
+        }
+        Expr::FieldAccess { var, .. } => {
+            if !bound.contains(var) && !out.contains(var) {
+                out.push(var.clone());
+            }
+        }
+        Expr::BinOp { left, right, .. } => {
+            collect_free_vars_in_expr(left, bound, out);
+            collect_free_vars_in_expr(right, bound, out);
+        }
+        Expr::MethodCall { receiver, args, .. } => {
+            if !bound.contains(receiver) && !out.contains(receiver) {
+                out.push(receiver.clone());
+            }
+            for a in args {
+                collect_free_vars_in_expr(a, bound, out);
+            }
+        }
+        Expr::Call { args, .. } => {
+            for a in args {
+                collect_free_vars_in_expr(a, bound, out);
+            }
+        }
+        _ => {}
     }
 }
 

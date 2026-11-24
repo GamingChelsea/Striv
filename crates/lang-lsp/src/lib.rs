@@ -331,14 +331,7 @@ impl LanguageServer for StrivLsp {
                 .iter()
                 .any(|(n, ty)| n == &var_name && ty == "Tuple")
             {
-                for (i, (swiz, idx)) in [
-                    ("x", 0),
-                    ("y", 1),
-                    ("z", 2),
-                    ("w", 3),
-                ]
-                .iter()
-                .enumerate()
+                for (i, (swiz, idx)) in [("x", 0), ("y", 1), ("z", 2), ("w", 3)].iter().enumerate()
                 {
                     items.push(CompletionItem {
                         label: swiz.to_string(),
@@ -357,14 +350,7 @@ impl LanguageServer for StrivLsp {
                         ..Default::default()
                     });
                 }
-                for (i, (swiz, idx)) in [
-                    ("r", 0),
-                    ("g", 1),
-                    ("b", 2),
-                    ("a", 3),
-                ]
-                .iter()
-                .enumerate()
+                for (i, (swiz, idx)) in [("r", 0), ("g", 1), ("b", 2), ("a", 3)].iter().enumerate()
                 {
                     items.push(CompletionItem {
                         label: swiz.to_string(),
@@ -448,10 +434,22 @@ impl LanguageServer for StrivLsp {
                     for e in &prog.enums {
                         if e.name == *ty_name {
                             for v in &e.variants {
+                                let (snip, fmt, detail) = if v.field_types.is_empty() {
+                                    (None, None, None)
+                                } else {
+                                    (
+                                        Some(format!("{}($0)", v.name)),
+                                        Some(InsertTextFormat::SNIPPET),
+                                        Some(format!("{}({})", v.name, v.field_types.join(", "))),
+                                    )
+                                };
                                 items.push(CompletionItem {
-                                    label: v.clone(),
+                                    label: v.name.clone(),
                                     kind: Some(CompletionItemKind::ENUM_MEMBER),
-                                    sort_text: Some(format!("0_{}", v)),
+                                    insert_text: snip,
+                                    insert_text_format: fmt,
+                                    detail,
+                                    sort_text: Some(format!("0_{}", v.name)),
                                     ..Default::default()
                                 });
                             }
@@ -556,8 +554,30 @@ impl LanguageServer for StrivLsp {
 
         // --- CASE 3: General context (keywords with trailing space + functions) ---
         let keywords_with_space = [
-            "use", "tweak", "const", "enum", "match", "struct", "impl", "fn", "let", "mut", "if",
-            "while", "for", "in", "return",
+            "use",
+            "tweak",
+            "const",
+            "enum",
+            "match",
+            "struct",
+            "impl",
+            "fn",
+            "let",
+            "mut",
+            "if",
+            "while",
+            "for",
+            "in",
+            "return",
+            "concurrent",
+            "spawn",
+            "shared",
+            "lock",
+            "parallel",
+            "select",
+            "timeout",
+            "defer",
+            "yield",
         ];
         for kw in keywords_with_space {
             items.push(CompletionItem {
@@ -610,10 +630,22 @@ impl LanguageServer for StrivLsp {
                     ..Default::default()
                 });
                 for v in &e.variants {
-                    let full = format!("{}::{}", e.name, v);
+                    let full = format!("{}::{}", e.name, v.name);
+                    let (snip, fmt, detail) = if v.field_types.is_empty() {
+                        (None, None, None)
+                    } else {
+                        (
+                            Some(format!("{}($0)", full)),
+                            Some(InsertTextFormat::SNIPPET),
+                            Some(format!("{}({})", full, v.field_types.join(", "))),
+                        )
+                    };
                     items.push(CompletionItem {
                         label: full.clone(),
                         kind: Some(CompletionItemKind::ENUM_MEMBER),
+                        insert_text: snip,
+                        insert_text_format: fmt,
+                        detail,
                         sort_text: Some(format!("0_{}", full)),
                         ..Default::default()
                     });
@@ -858,7 +890,7 @@ impl LanguageServer for StrivLsp {
             }
             if let Some((ty, member)) = token.split_once("::") {
                 if let Some(e) = prog.enums.iter().find(|e| e.name == ty) {
-                    if let Some(idx) = e.variants.iter().position(|v| v == member) {
+                    if let Some(idx) = e.variants.iter().position(|v| &v.name == member) {
                         return Ok(Some(Hover {
                             contents: HoverContents::Markup(MarkupContent {
                                 kind: MarkupKind::Markdown,
@@ -876,7 +908,11 @@ impl LanguageServer for StrivLsp {
                         value: format!(
                             "```striv\nenum {} {{ {} }}\n```",
                             e.name,
-                            e.variants.join(", ")
+                            e.variants
+                                .iter()
+                                .map(|v| v.name.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", ")
                         ),
                     }),
                     range: None,

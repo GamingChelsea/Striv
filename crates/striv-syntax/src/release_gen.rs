@@ -53,7 +53,7 @@ pub fn transpile_to_rust_with_consts(
     for e in &prog.enums {
         out.push_str(&format!("pub mod {} {{\n", e.name));
         for (i, v) in e.variants.iter().enumerate() {
-            out.push_str(&format!("    pub const {}: i64 = {};\n", v, i));
+            out.push_str(&format!("    pub const {}: i64 = {};\n", v.name, i));
         }
         out.push_str("}\n\n");
     }
@@ -307,14 +307,63 @@ fn emit_stmt(stmt: &Stmt, structs: &HashSet<String>, level: usize, out: &mut Str
             }
             out.push_str(&format!("{}}}\n", ind));
         }
+        Stmt::Defer(_) | Stmt::Block(_) | Stmt::Yield | Stmt::BlockCall { .. } => {
+            out.push_str(&format!(
+                "{}// defer/block not yet lowered in release_gen\n",
+                ind
+            ));
+        }
+        Stmt::Select { .. } => {
+            out.push_str(&format!(
+                "{}// select not yet lowered in release_gen\n",
+                ind
+            ));
+        }
+        Stmt::Shared { name, value } => {
+            out.push_str(&format!(
+                "{}let {} = std::sync::Arc::new(std::sync::Mutex::new({}));\n",
+                ind,
+                name,
+                emit_expr(value, structs)
+            ));
+        }
+        Stmt::Lock { var, body } => {
+            out.push_str(&format!(
+                "{}{{\n{}    let mut {} = {}.lock().unwrap();\n",
+                ind, ind, var, var
+            ));
+            for s in body {
+                emit_stmt(s, structs, level + 1, out);
+            }
+            out.push_str(&format!("{}}}\n", ind));
+        }
+        Stmt::Concurrent(body) => {
+            out.push_str(&format!("{}{{\n", ind));
+            for s in body {
+                emit_stmt(s, structs, level + 1, out);
+            }
+            out.push_str(&format!("{}}}\n", ind));
+        }
+        Stmt::Spawn { name, args } => {
+            out.push_str(&format!(
+                "{}{}({});\n",
+                ind,
+                name.replace("__", "::"),
+                emit_call_args(args, structs)
+            ));
+        }
         Stmt::ForEach {
             var,
             is_mut,
+            is_parallel: _,
             collection,
             body,
         } => {
             let iter_fn = if *is_mut { "iter_mut" } else { "iter" };
-            out.push_str(&format!("{}for {} in {}.{}() {{\n", ind, var, collection, iter_fn));
+            out.push_str(&format!(
+                "{}for {} in {}.{}() {{\n",
+                ind, var, collection, iter_fn
+            ));
             for s in body {
                 emit_stmt(s, structs, level + 1, out);
             }
@@ -344,6 +393,7 @@ fn emit_stmt(stmt: &Stmt, structs: &HashSet<String>, level: usize, out: &mut Str
                 let p_str = match pat {
                     MatchPat::Wildcard => "_".to_string(),
                     MatchPat::Expr(e) => emit_expr(e, structs),
+                    MatchPat::EnumDestructure { .. } => "_".to_string(),
                 };
                 out.push_str(&format!("{}    {} => {{\n", ind, p_str));
                 for s in body {

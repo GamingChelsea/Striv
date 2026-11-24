@@ -1,5 +1,10 @@
+use crossbeam_channel::{Receiver, Select, Sender, unbounded};
+use parking_lot::RawMutex;
+use parking_lot::lock_api::RawMutex as _;
+use rayon::prelude::*;
 use std::collections::{BTreeMap, BinaryHeap, HashMap, HashSet, VecDeque};
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::atomic::{AtomicI64, Ordering};
+use std::time::Duration;
 
 // --- 1. DEQUE (VecDeque<i64>) ---
 #[unsafe(no_mangle)]
@@ -332,28 +337,122 @@ pub extern "C" fn striv_bitset_free(p: *mut BitSet) {
     }
 }
 
-// --- 10. CHANNEL (mpsc::channel::<i64>()) ---
+// --- 10. CHANNEL (crossbeam-channel, 100% thread-safe!) ---
 pub struct StrivChannel {
     tx: Sender<i64>,
     rx: Receiver<i64>,
 }
 #[unsafe(no_mangle)]
 pub extern "C" fn striv_channel_new() -> *mut StrivChannel {
-    let (tx, rx) = mpsc::channel();
+    let (tx, rx) = unbounded();
     Box::into_raw(Box::new(StrivChannel { tx, rx }))
 }
 #[unsafe(no_mangle)]
 pub extern "C" fn striv_channel_send(p: *const StrivChannel, v: i64) -> i64 {
-    unsafe { (*p).tx.send(v).is_ok() as i64 }
+    let _ = unsafe { (*p).tx.send(v) };
+    0
 }
 #[unsafe(no_mangle)]
 pub extern "C" fn striv_channel_recv(p: *const StrivChannel) -> i64 {
-    unsafe { (*p).rx.try_recv().unwrap_or(0) }
+    unsafe { (*p).rx.recv().unwrap_or(0) }
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_channel_try_recv(p: *const StrivChannel) -> i64 {
+    unsafe { (*p).rx.try_recv().unwrap_or(-1) }
 }
 #[unsafe(no_mangle)]
 pub extern "C" fn striv_channel_free(p: *mut StrivChannel) {
     if !p.is_null() {
         unsafe { drop(Box::from_raw(p)) };
+    }
+}
+
+// --- 10b. ATOMIC (Lock-free multi-core counter) ---
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_atomic_new(init: i64) -> *mut AtomicI64 {
+    Box::into_raw(Box::new(AtomicI64::new(init)))
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_atomic_add(p: *const AtomicI64, val: i64) -> i64 {
+    unsafe { (*p).fetch_add(val, Ordering::SeqCst) + val }
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_atomic_sub(p: *const AtomicI64, val: i64) -> i64 {
+    unsafe { (*p).fetch_sub(val, Ordering::SeqCst) - val }
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_atomic_get(p: *const AtomicI64) -> i64 {
+    unsafe { (*p).load(Ordering::SeqCst) }
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_atomic_set(p: *const AtomicI64, val: i64) -> i64 {
+    unsafe { (*p).store(val, Ordering::SeqCst) };
+    0
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_atomic_free(p: *mut AtomicI64) {
+    if !p.is_null() {
+        unsafe { drop(Box::from_raw(p)) };
+    }
+}
+
+// --- 10c. TASK-GROUP FOR `concurrent { spawn ... }` (Rayon Thread-Pool) ---
+pub struct TaskGroup {
+    jobs: Vec<(usize, Vec<i64>)>,
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_group_begin() -> *mut TaskGroup {
+    Box::into_raw(Box::new(TaskGroup { jobs: Vec::new() }))
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_group_spawn(
+    g_ptr: *mut TaskGroup,
+    fn_addr: usize,
+    args_ptr: *const i64,
+    arg_count: i64,
+) {
+    let group = unsafe { &mut *g_ptr };
+    let args = if arg_count > 0 {
+        unsafe { std::slice::from_raw_parts(args_ptr, arg_count as usize).to_vec() }
+    } else {
+        Vec::new()
+    };
+    group.jobs.push((fn_addr, args));
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_group_wait(g_ptr: *mut TaskGroup) {
+    if g_ptr.is_null() {
+        return;
+    }
+    let group = unsafe { Box::from_raw(g_ptr) };
+    rayon::scope(|s| {
+        for (fn_addr, args) in group.jobs {
+            s.spawn(move |_| unsafe {
+                call_jit_fn_dynamic(fn_addr, &args);
+            });
+        }
+    });
+}
+unsafe fn call_jit_fn_dynamic(addr: usize, a: &[i64]) -> i64 {
+    let ptr = addr as *const ();
+    match a.len() {
+        0 => unsafe { std::mem::transmute::<*const (), fn() -> i64>(ptr)() },
+        1 => unsafe { std::mem::transmute::<*const (), fn(i64) -> i64>(ptr)(a[0]) },
+        2 => unsafe { std::mem::transmute::<*const (), fn(i64, i64) -> i64>(ptr)(a[0], a[1]) },
+        3 => unsafe {
+            std::mem::transmute::<*const (), fn(i64, i64, i64) -> i64>(ptr)(a[0], a[1], a[2])
+        },
+        4 => unsafe {
+            std::mem::transmute::<*const (), fn(i64, i64, i64, i64) -> i64>(ptr)(
+                a[0], a[1], a[2], a[3],
+            )
+        },
+        5 => unsafe {
+            std::mem::transmute::<*const (), fn(i64, i64, i64, i64, i64) -> i64>(ptr)(
+                a[0], a[1], a[2], a[3], a[4],
+            )
+        },
+        _ => panic!("spawn currently supports up to 5 parameters"),
     }
 }
 
@@ -431,6 +530,7 @@ pub fn std_collection_symbols() -> Vec<(&'static str, *const u8, &'static str, b
         ("Rng::new", striv_rng_new as *const u8, "i->i", false),
         ("BitSet::new", striv_bitset_new as *const u8, "i->i", false),
         ("Channel::new", striv_channel_new as *const u8, "->i", false),
+        ("Atomic::new", striv_atomic_new as *const u8, "i->i", false),
         ("Vec3::new", striv_vec3_new as *const u8, "fff->i", false),
         (
             "Mat4::identity",
@@ -439,17 +539,47 @@ pub fn std_collection_symbols() -> Vec<(&'static str, *const u8, &'static str, b
             false,
         ),
         // Methods
-        ("Deque__push_back", striv_deque_push_back as *const u8, "ii->i", true),
-        ("Deque__push_front", striv_deque_push_front as *const u8, "ii->i", true),
-        ("Deque__pop_front", striv_deque_pop_front as *const u8, "i->i", true),
-        ("Deque__pop_back", striv_deque_pop_back as *const u8, "i->i", true),
+        (
+            "Deque__push_back",
+            striv_deque_push_back as *const u8,
+            "ii->i",
+            true,
+        ),
+        (
+            "Deque__push_front",
+            striv_deque_push_front as *const u8,
+            "ii->i",
+            true,
+        ),
+        (
+            "Deque__pop_front",
+            striv_deque_pop_front as *const u8,
+            "i->i",
+            true,
+        ),
+        (
+            "Deque__pop_back",
+            striv_deque_pop_back as *const u8,
+            "i->i",
+            true,
+        ),
         ("Deque__len", striv_deque_len as *const u8, "i->i", false),
         ("Map__insert", striv_map_insert as *const u8, "iii->i", true),
         ("Map__get", striv_map_get as *const u8, "ii->i", false),
-        ("Map__contains", striv_map_contains as *const u8, "ii->i", false),
+        (
+            "Map__contains",
+            striv_map_contains as *const u8,
+            "ii->i",
+            false,
+        ),
         ("Map__remove", striv_map_remove as *const u8, "ii->i", true),
         ("Map__len", striv_map_len as *const u8, "i->i", false),
-        ("StrMap__insert", striv_strmap_insert as *const u8, "iii->i", true),
+        (
+            "StrMap__insert",
+            striv_strmap_insert as *const u8,
+            "iii->i",
+            true,
+        ),
         ("StrMap__get", striv_strmap_get as *const u8, "ii->i", false),
         (
             "StrMap__contains",
@@ -457,7 +587,12 @@ pub fn std_collection_symbols() -> Vec<(&'static str, *const u8, &'static str, b
             "ii->i",
             false,
         ),
-        ("BTree__insert", striv_btree_insert as *const u8, "iii->i", true),
+        (
+            "BTree__insert",
+            striv_btree_insert as *const u8,
+            "iii->i",
+            true,
+        ),
         ("BTree__get", striv_btree_get as *const u8, "ii->i", false),
         (
             "BTree__first_key",
@@ -472,7 +607,12 @@ pub fn std_collection_symbols() -> Vec<(&'static str, *const u8, &'static str, b
             false,
         ),
         ("Set__insert", striv_set_insert as *const u8, "ii->i", true),
-        ("Set__contains", striv_set_contains as *const u8, "ii->i", false),
+        (
+            "Set__contains",
+            striv_set_contains as *const u8,
+            "ii->i",
+            false,
+        ),
         ("Set__remove", striv_set_remove as *const u8, "ii->i", true),
         ("Set__len", striv_set_len as *const u8, "i->i", false),
         ("Heap__push", striv_heap_push as *const u8, "ii->i", true),
@@ -493,9 +633,34 @@ pub fn std_collection_symbols() -> Vec<(&'static str, *const u8, &'static str, b
         ("Rng__range", striv_rng_range as *const u8, "iii->i", true),
         ("BitSet__set", striv_bitset_set as *const u8, "ii->i", true),
         ("BitSet__get", striv_bitset_get as *const u8, "ii->i", false),
-        ("BitSet__clear", striv_bitset_clear as *const u8, "ii->i", true),
-        ("Channel__send", striv_channel_send as *const u8, "ii->i", false),
-        ("Channel__recv", striv_channel_recv as *const u8, "i->i", false),
+        (
+            "BitSet__clear",
+            striv_bitset_clear as *const u8,
+            "ii->i",
+            true,
+        ),
+        (
+            "Channel__send",
+            striv_channel_send as *const u8,
+            "ii->i",
+            false,
+        ),
+        (
+            "Channel__recv",
+            striv_channel_recv as *const u8,
+            "i->i",
+            false,
+        ),
+        (
+            "Channel__try_recv",
+            striv_channel_try_recv as *const u8,
+            "i->i",
+            false,
+        ),
+        ("Atomic__add", striv_atomic_add as *const u8, "ii->i", false),
+        ("Atomic__sub", striv_atomic_sub as *const u8, "ii->i", false),
+        ("Atomic__get", striv_atomic_get as *const u8, "i->i", false),
+        ("Atomic__set", striv_atomic_set as *const u8, "ii->i", false),
         ("Vec3__dot", striv_vec3_dot as *const u8, "ii->f", false),
         ("Vec3__len", striv_vec3_len as *const u8, "i->f", false),
         ("Mat4__get", striv_mat4_get as *const u8, "ii->f", false),
@@ -517,6 +682,7 @@ pub fn std_drop_symbols() -> Vec<(&'static str, *const u8)> {
         ("Rng", striv_rng_free as *const u8),
         ("BitSet", striv_bitset_free as *const u8),
         ("Channel", striv_channel_free as *const u8),
+        ("Atomic", striv_atomic_free as *const u8),
         ("Vec3", striv_vec3_free as *const u8),
         ("Mat4", striv_mat4_free as *const u8),
     ]
@@ -582,4 +748,144 @@ pub extern "C" fn striv_svec_free(v_ptr: *mut RawStructVec) {
 #[inline]
 fn p_is_null<T>(p: *mut T) -> bool {
     p.is_null()
+}
+
+// --- 13. SHARED BOX (`shared x = Struct { ... }` + `lock x { ... }`) ---
+pub struct SharedBox {
+    mutex: RawMutex,
+    data: std::cell::UnsafeCell<Vec<u8>>,
+}
+unsafe impl Send for SharedBox {}
+unsafe impl Sync for SharedBox {}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_shared_new(src_ptr: *const u8, byte_size: i64) -> *mut SharedBox {
+    let slice = unsafe { std::slice::from_raw_parts(src_ptr, byte_size as usize) };
+    Box::into_raw(Box::new(SharedBox {
+        mutex: RawMutex::INIT,
+        data: std::cell::UnsafeCell::new(slice.to_vec()),
+    }))
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_shared_lock(p: *const SharedBox) -> *mut u8 {
+    let sb = unsafe { &*p };
+    sb.mutex.lock();
+    unsafe { (*sb.data.get()).as_mut_ptr() }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_shared_unlock(p: *const SharedBox) {
+    let sb = unsafe { &*p };
+    unsafe { sb.mutex.unlock() };
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_shared_free(p: *mut SharedBox) {
+    if !p.is_null() {
+        unsafe { drop(Box::from_raw(p)) };
+    }
+}
+
+// --- 14. PARALLEL FOR (`parallel for [mut] e in list`) ---
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_par_for_svec(
+    v_ptr: *mut RawStructVec,
+    body_fn_addr: usize,
+    caps_ptr: *const i64,
+    cap_count: i64,
+) {
+    let v = unsafe { &mut *v_ptr };
+    if v.len == 0 {
+        return;
+    }
+    let caps: &[i64] = if cap_count > 0 {
+        unsafe { std::slice::from_raw_parts(caps_ptr, cap_count as usize) }
+    } else {
+        &[]
+    };
+    let elem_size = v.elem_size;
+    v.data
+        .par_chunks_exact_mut(elem_size)
+        .for_each(|chunk| unsafe {
+            let elem_addr = chunk.as_mut_ptr() as i64;
+            call_par_body(body_fn_addr, elem_addr, caps);
+        });
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_par_for_vec(
+    v_ptr: *mut Vec<i64>,
+    body_fn_addr: usize,
+    caps_ptr: *const i64,
+    cap_count: i64,
+) {
+    let v = unsafe { &mut *v_ptr };
+    let caps: &[i64] = if cap_count > 0 {
+        unsafe { std::slice::from_raw_parts(caps_ptr, cap_count as usize) }
+    } else {
+        &[]
+    };
+    v.par_iter_mut().for_each(|item| unsafe {
+        call_par_body(body_fn_addr, *item, caps);
+    });
+}
+
+unsafe fn call_par_body(addr: usize, elem: i64, c: &[i64]) {
+    let ptr = addr as *const ();
+    match c.len() {
+        0 => unsafe {
+            std::mem::transmute::<*const (), fn(i64) -> i64>(ptr)(elem);
+        },
+        1 => unsafe {
+            std::mem::transmute::<*const (), fn(i64, i64) -> i64>(ptr)(elem, c[0]);
+        },
+        2 => unsafe {
+            std::mem::transmute::<*const (), fn(i64, i64, i64) -> i64>(ptr)(elem, c[0], c[1]);
+        },
+        3 => unsafe {
+            std::mem::transmute::<*const (), fn(i64, i64, i64, i64) -> i64>(ptr)(
+                elem, c[0], c[1], c[2],
+            );
+        },
+        4 => unsafe {
+            std::mem::transmute::<*const (), fn(i64, i64, i64, i64, i64) -> i64>(ptr)(
+                elem, c[0], c[1], c[2], c[3],
+            );
+        },
+        _ => panic!("parallel for currently supports up to 4 captured variables"),
+    }
+}
+
+// --- 15. SELECT (`select { msg = ch.recv() => { ... } timeout(ms) => { ... } }`) ---
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_select_recv(
+    chans_ptr: *const *const StrivChannel,
+    count: i64,
+    timeout_ms: i64,
+    out_val: *mut i64,
+) -> i64 {
+    let slice = unsafe { std::slice::from_raw_parts(chans_ptr, count as usize) };
+    let mut sel = Select::new();
+    for &ch_ptr in slice {
+        let ch = unsafe { &*ch_ptr };
+        sel.recv(&ch.rx);
+    }
+
+    let oper = if timeout_ms >= 0 {
+        match sel.select_timeout(Duration::from_millis(timeout_ms as u64)) {
+            Ok(op) => op,
+            Err(_) => return -1,
+        }
+    } else {
+        sel.select()
+    };
+
+    let idx = oper.index();
+    let ch = unsafe { &*slice[idx] };
+    let val = oper.recv(&ch.rx).unwrap_or(0);
+    unsafe {
+        *out_val = val;
+    }
+    idx as i64
 }

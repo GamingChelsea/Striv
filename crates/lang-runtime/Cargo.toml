@@ -8,3 +8,6 @@ tiny_http.workspace = true
 minifb.workspace = true
 slotmap.workspace = true
 fastrand = "2.1"
+rayon.workspace = true
+crossbeam-channel.workspace = true
+parking_lot.workspace = true

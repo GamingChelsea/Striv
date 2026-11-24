@@ -101,7 +101,11 @@ pub fn format_program(prog: &Program) -> String {
     for e in &prog.enums {
         out.push_str(&format!("enum {} {{\n", e.name));
         for v in &e.variants {
-            out.push_str(&format!("    {},\n", v));
+            if v.field_types.is_empty() {
+                out.push_str(&format!("    {},\n", v.name));
+            } else {
+                out.push_str(&format!("    {}({}),\n", v.name, v.field_types.join(", ")));
+            }
         }
         out.push_str("}\n\n");
     }
@@ -210,14 +214,104 @@ fn format_stmt(stmt: &Stmt, level: usize, out: &mut String) {
                 format_expr(value)
             ));
         }
+        Stmt::Defer(inner) => {
+            out.push_str(&format!("{}defer ", ind));
+            if let Stmt::Block(stmts) = &**inner {
+                out.push_str("{\n");
+                for s in stmts {
+                    format_stmt(s, level + 1, out);
+                }
+                out.push_str(&format!("{}}}\n", ind));
+            } else {
+                let mut tmp = String::new();
+                format_stmt(inner, 0, &mut tmp);
+                out.push_str(tmp.trim_start());
+            }
+        }
+        Stmt::Block(stmts) => {
+            out.push_str(&format!("{}{{\n", ind));
+            for s in stmts {
+                format_stmt(s, level + 1, out);
+            }
+            out.push_str(&format!("{}}}\n", ind));
+        }
+        Stmt::Yield => {
+            out.push_str(&format!("{}yield()\n", ind));
+        }
+        Stmt::BlockCall { name, args, body } => {
+            if args.is_empty() {
+                out.push_str(&format!("{}{} {{\n", ind, name));
+            } else {
+                out.push_str(&format!("{}{}({}) {{\n", ind, name, format_args(args)));
+            }
+            for s in body {
+                format_stmt(s, level + 1, out);
+            }
+            out.push_str(&format!("{}}}\n", ind));
+        }
+        Stmt::Select { arms, timeout } => {
+            out.push_str(&format!("{}select {{\n", ind));
+            for arm in arms {
+                out.push_str(&format!(
+                    "{}    {} = {}.recv() => {{\n",
+                    ind, arm.bind_var, arm.channel_var
+                ));
+                for s in &arm.body {
+                    format_stmt(s, level + 2, out);
+                }
+                out.push_str(&format!("{}    }}\n", ind));
+            }
+            if let Some((ms_expr, t_body)) = timeout {
+                out.push_str(&format!(
+                    "{}    timeout({}) => {{\n",
+                    ind,
+                    format_expr(ms_expr)
+                ));
+                for s in t_body {
+                    format_stmt(s, level + 2, out);
+                }
+                out.push_str(&format!("{}    }}\n", ind));
+            }
+            out.push_str(&format!("{}}}\n", ind));
+        }
+        Stmt::Shared { name, value } => {
+            out.push_str(&format!(
+                "{}shared {} = {}\n",
+                ind,
+                name,
+                format_expr(value)
+            ));
+        }
+        Stmt::Lock { var, body } => {
+            out.push_str(&format!("{}lock {} {{\n", ind, var));
+            for s in body {
+                format_stmt(s, level + 1, out);
+            }
+            out.push_str(&format!("{}}}\n", ind));
+        }
+        Stmt::Concurrent(body) => {
+            out.push_str(&format!("{}concurrent {{\n", ind));
+            for s in body {
+                format_stmt(s, level + 1, out);
+            }
+            out.push_str(&format!("{}}}\n", ind));
+        }
+        Stmt::Spawn { name, args } => {
+            out.push_str(&format!("{}spawn {}({})\n", ind, name, format_args(args)));
+        }
         Stmt::ForEach {
             var,
             is_mut,
+            is_parallel,
             collection,
             body,
         } => {
+            let p = if *is_parallel { "parallel " } else { "" };
             let m = if *is_mut { "mut " } else { "" };
-            out.push_str(&format!("{}for {}{} in {} {{\n", ind, m, var, collection));
+            out.push_str(&format!(
+                "{}{}for {}{} in {} {{\n",
+                ind, p, m, var, collection
+            ));
             for s in body {
                 format_stmt(s, level + 1, out);
             }
@@ -349,6 +443,11 @@ fn format_stmt(stmt: &Stmt, level: usize, out: &mut String) {
                 let pat_str = match pat {
                     crate::MatchPat::Wildcard => "_".to_string(),
                     crate::MatchPat::Expr(e) => format_expr(e),
+                    crate::MatchPat::EnumDestructure {
+                        enum_name,
+                        variant,
+                        bindings,
+                    } => format!("{}::{}({})", enum_name, variant, bindings.join(", ")),
                 };
                 out.push_str(&format!("{}    {} => {{\n", ind, pat_str));
                 for s in body {
