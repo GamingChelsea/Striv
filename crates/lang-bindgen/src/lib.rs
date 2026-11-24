@@ -88,11 +88,16 @@ pub fn generate_rust_bridge(rust_source: &str) -> (String, Vec<ExportedFn>) {
     }
 
     generated_rust
-        .push_str("pub fn exported_symbols() -> &'static [(&'static str, &'static str, *const u8, usize)] {\n    &[\n");
+        .push_str("pub fn exported_symbols() -> &'static [(&'static str, &'static str, *const u8, &'static str)] {\n    &[\n");
     for ex in &exported {
+        let sig = format!(
+            "{}->{}",
+            "i".repeat(ex.param_count),
+            if ex.has_return { "i" } else { "i" }
+        );
         generated_rust.push_str(&format!(
-            "        (\"{}\", \"{}\", {} as *const u8, {}),\n",
-            ex.striv_name, ex.c_symbol, ex.c_symbol, ex.param_count
+            "        (\"{}\", \"{}\", {} as *const u8, \"{}\"),\n",
+            ex.striv_name, ex.c_symbol, ex.c_symbol, sig
         ));
     }
     generated_rust.push_str("    ]\n}\n");

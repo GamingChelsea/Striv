@@ -2,7 +2,7 @@ use logos::Logos;
 
 pub mod fmt;
 pub mod release_gen;
-pub use fmt::format_program;
+pub use fmt::{format_expr, format_program, format_source};
 
 // AST
 
@@ -60,7 +60,18 @@ pub enum AssignTarget {
 pub enum Stmt {
     Let {
         name: String,
+        ty_hint: Option<String>,
         is_mut: bool,
+        value: Expr,
+    },
+    ForEach {
+        var: String,
+        is_mut: bool,
+        collection: String,
+        body: Vec<Stmt>,
+    },
+    LetTuple {
+        names: Vec<(String, bool)>,
         value: Expr,
     },
     Assign {
@@ -136,6 +147,11 @@ pub enum Expr {
     Some(Box<Expr>),
     None,
     Try(Box<Expr>),
+    Tuple(Vec<Expr>),
+    TupleIndex {
+        tuple: Box<Expr>,
+        idx: usize,
+    },
     VecLit(Vec<Expr>),
     Index {
         var: String,
@@ -689,20 +705,53 @@ impl Parser {
         match self.peek() {
             Some(Token::Let) => {
                 self.next();
-                let is_mut = if self.peek() == Some(&Token::Mut) {
-                    self.next();
-                    true
+                if self.peek() == Some(&Token::LParen) {
+                    self.next(); // `(`
+                    let mut names = Vec::new();
+                    while self.peek() != Some(&Token::RParen) {
+                        let is_mut = if self.peek() == Some(&Token::Mut) {
+                            self.next();
+                            true
+                        } else {
+                            false
+                        };
+                        let Some(Token::Ident(n)) = self.next() else {
+                            self.error("Expected variable name in tuple");
+                        };
+                        names.push((n, is_mut));
+                        if self.peek() == Some(&Token::Comma) {
+                            self.next();
+                        }
+                    }
+                    self.expect(Token::RParen);
+                    self.expect(Token::Assign);
+                    Stmt::LetTuple {
+                        names,
+                        value: self.parse_expr(),
+                    }
                 } else {
-                    false
-                };
-                let Some(Token::Ident(name)) = self.next() else {
-                    panic!("Name expected")
-                };
-                self.expect(Token::Assign);
-                Stmt::Let {
-                    name,
-                    is_mut,
-                    value: self.parse_expr(),
+                    let is_mut = if self.peek() == Some(&Token::Mut) {
+                        self.next();
+                        true
+                    } else {
+                        false
+                    };
+                    let Some(Token::Ident(name)) = self.next() else {
+                        panic!("Name expected")
+                    };
+                    let ty_hint = if self.peek() == Some(&Token::Colon) {
+                        self.next(); // `:`
+                        Some(self.parse_type_name())
+                    } else {
+                        None
+                    };
+                    self.expect(Token::Assign);
+                    Stmt::Let {
+                        name,
+                        ty_hint,
+                        is_mut,
+                        value: self.parse_expr(),
+                    }
                 }
             }
             Some(Token::If) => {
@@ -730,22 +779,37 @@ impl Parser {
             }
             Some(Token::For) => {
                 self.next(); // consume `for`
-                if self.peek() == Some(&Token::Mut) {
+                let is_mut = if self.peek() == Some(&Token::Mut) {
                     self.next();
-                }
+                    true
+                } else {
+                    false
+                };
                 let Some(Token::Ident(var)) = self.next() else {
                     self.error("Expected loop variable after `for` (e.g. `for i in 0..10`)");
                 };
                 self.expect(Token::In);
-                let start = self.parse_expr();
-                self.expect(Token::DotDot);
-                let end = self.parse_expr();
-                let body = self.parse_block();
-                Stmt::ForRange {
-                    var,
-                    start,
-                    end,
-                    body,
+                let first = self.parse_expr();
+                if self.peek() == Some(&Token::DotDot) {
+                    self.next(); // `..`
+                    let end = self.parse_expr();
+                    let body = self.parse_block();
+                    Stmt::ForRange {
+                        var,
+                        start: first,
+                        end,
+                        body,
+                    }
+                } else if let Expr::Var(coll_name) = first {
+                    let body = self.parse_block();
+                    Stmt::ForEach {
+                        var,
+                        is_mut,
+                        collection: coll_name,
+                        body,
+                    }
+                } else {
+                    self.error("Expected `start..end` or a list variable after `in`");
                 }
             }
             Some(Token::Match) => {
@@ -966,6 +1030,20 @@ impl Parser {
         left
     }
 
+    fn parse_type_name(&mut self) -> String {
+        let Some(Token::Ident(base)) = self.next() else {
+            self.error("Expected type name");
+        };
+        if self.peek() == Some(&Token::Lt) {
+            self.next(); // `<`
+            let inner = self.parse_type_name();
+            self.expect(Token::Gt);
+            format!("{}<{}>", base, inner)
+        } else {
+            base
+        }
+    }
+
     fn parse_args(&mut self) -> Vec<Expr> {
         self.expect(Token::LParen);
         let mut args = Vec::new();
@@ -1070,19 +1148,27 @@ impl Parser {
                     }
                 } else if self.peek() == Some(&Token::Dot) {
                     self.next(); // `.`
-                    let Some(Token::Ident(member)) = self.next() else {
-                        panic!("Member name expected after `.`")
-                    };
-                    if self.peek() == Some(&Token::LParen) {
-                        Expr::MethodCall {
-                            receiver: n,
-                            method: member,
-                            args: self.parse_args(),
+                    if let Some(Token::Int(idx)) = self.peek().cloned() {
+                        self.next();
+                        Expr::TupleIndex {
+                            tuple: Box::new(Expr::Var(n)),
+                            idx: idx as usize,
                         }
                     } else {
-                        Expr::FieldAccess {
-                            var: n,
-                            field: member,
+                        let Some(Token::Ident(member)) = self.next() else {
+                            panic!("Member name expected after `.`")
+                        };
+                        if self.peek() == Some(&Token::LParen) {
+                            Expr::MethodCall {
+                                receiver: n,
+                                method: member,
+                                args: self.parse_args(),
+                            }
+                        } else {
+                            Expr::FieldAccess {
+                                var: n,
+                                field: member,
+                            }
                         }
                     }
                 } else if self.peek() == Some(&Token::LBracket) {
@@ -1129,9 +1215,22 @@ impl Parser {
                 Expr::VecLit(items)
             }
             Some(Token::LParen) => {
-                let e = self.parse_expr();
-                self.expect(Token::RParen);
-                e
+                let first = self.parse_expr();
+                if self.peek() == Some(&Token::Comma) {
+                    let mut items = vec![first];
+                    while self.peek() == Some(&Token::Comma) {
+                        self.next(); // `,`
+                        if self.peek() == Some(&Token::RParen) {
+                            break;
+                        }
+                        items.push(self.parse_expr());
+                    }
+                    self.expect(Token::RParen);
+                    Expr::Tuple(items)
+                } else {
+                    self.expect(Token::RParen);
+                    first
+                }
             }
             t => panic!("Expected expression, found: {:?}", t),
         }
@@ -1213,6 +1312,12 @@ fn check_stmts_mut(
         match stmt {
             Stmt::Let { name, is_mut, .. } => {
                 mut_vars.insert(name.clone(), *is_mut);
+            }
+            Stmt::ForEach {
+                var, is_mut, body, ..
+            } => {
+                mut_vars.insert(var.clone(), *is_mut);
+                check_stmts_mut(src, body, mut_vars, errors);
             }
             Stmt::Assign { name, .. } | Stmt::FieldAssign { var: name, .. } => {
                 match mut_vars.get(name) {

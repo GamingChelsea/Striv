@@ -1,5 +1,72 @@
 use crate::{Expr, Function, Op, Program, Stmt};
 
+/// Source-preserving formatter: normalizes indentation (4 spaces per `{}` block),
+/// preserves `//` comments and single blank lines, and ensures a trailing newline.
+pub fn format_source(src: &str) -> String {
+    let mut out = String::with_capacity(src.len());
+    let mut indent: usize = 0;
+    let mut prev_blank = false;
+
+    for raw_line in src.lines() {
+        let trimmed = raw_line.trim();
+        if trimmed.is_empty() {
+            if !out.is_empty() && !prev_blank {
+                out.push('\n');
+                prev_blank = true;
+            }
+            continue;
+        }
+        prev_blank = false;
+
+        let leading_closes = trimmed.chars().take_while(|&c| c == '}').count();
+        let line_indent = indent.saturating_sub(leading_closes);
+        for _ in 0..line_indent {
+            out.push_str("    ");
+        }
+        out.push_str(trimmed);
+        out.push('\n');
+
+        let (opens, closes) = count_braces_outside_strings_and_comments(trimmed);
+        indent = indent.saturating_add(opens).saturating_sub(closes);
+    }
+
+    while out.ends_with("\n\n") {
+        out.pop();
+    }
+    out
+}
+
+fn count_braces_outside_strings_and_comments(line: &str) -> (usize, usize) {
+    let mut opens = 0usize;
+    let mut closes = 0usize;
+    let mut in_str = false;
+    let mut escaped = false;
+    let mut chars = line.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        if in_str {
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == '"' {
+                in_str = false;
+            }
+            continue;
+        }
+        if c == '/' && chars.peek() == Some(&'/') {
+            break;
+        }
+        match c {
+            '"' => in_str = true,
+            '{' => opens += 1,
+            '}' => closes += 1,
+            _ => {}
+        }
+    }
+    (opens, closes)
+}
+
 pub fn format_program(prog: &Program) -> String {
     let mut out = String::new();
 
@@ -125,15 +192,52 @@ fn format_stmt(stmt: &Stmt, level: usize, out: &mut String) {
     match stmt {
         Stmt::Let {
             name,
+            ty_hint,
             is_mut,
             value,
         } => {
             let m = if *is_mut { "mut " } else { "" };
+            let ty_s = ty_hint
+                .as_ref()
+                .map(|t| format!(": {}", t))
+                .unwrap_or_default();
             out.push_str(&format!(
-                "{}let {}{} = {}\n",
+                "{}let {}{}{} = {}\n",
                 ind,
                 m,
                 name,
+                ty_s,
+                format_expr(value)
+            ));
+        }
+        Stmt::ForEach {
+            var,
+            is_mut,
+            collection,
+            body,
+        } => {
+            let m = if *is_mut { "mut " } else { "" };
+            out.push_str(&format!("{}for {}{} in {} {{\n", ind, m, var, collection));
+            for s in body {
+                format_stmt(s, level + 1, out);
+            }
+            out.push_str(&format!("{}}}\n", ind));
+        }
+        Stmt::LetTuple { names, value } => {
+            let parts: Vec<String> = names
+                .iter()
+                .map(|(n, is_mut)| {
+                    if *is_mut {
+                        format!("mut {}", n)
+                    } else {
+                        n.clone()
+                    }
+                })
+                .collect();
+            out.push_str(&format!(
+                "{}let ({}) = {}\n",
+                ind,
+                parts.join(", "),
                 format_expr(value)
             ));
         }
@@ -264,7 +368,7 @@ fn format_args(args: &[Expr]) -> String {
     args.iter().map(format_expr).collect::<Vec<_>>().join(", ")
 }
 
-fn format_expr(expr: &Expr) -> String {
+pub fn format_expr(expr: &Expr) -> String {
     match expr {
         Expr::Int(v) => v.to_string(),
         Expr::Hex(v) => format!("0x{:X}", v),
@@ -276,6 +380,8 @@ fn format_expr(expr: &Expr) -> String {
         Expr::Float(v) => format!("{:?}", v),
         Expr::PathConst { ty, member } => format!("{}::{}", ty, member),
         Expr::VecLit(items) => format!("[{}]", format_args(items)),
+        Expr::Tuple(items) => format!("({})", format_args(items)),
+        Expr::TupleIndex { tuple, idx } => format!("{}.{}", format_expr(tuple), idx),
         Expr::Index { var, index } => format!("{}[{}]", var, format_expr(index)),
         Expr::StrInterp(parts) => {
             let mut s = String::from("\"");

@@ -30,6 +30,7 @@ extern "C" fn host_print_struct(data_ptr: *const i64, def_ptr: *const StructDef)
 
 // 2. Variable kinds: integer, stack-allocated struct, or struct pointer
 #[derive(Clone)]
+#[allow(dead_code)]
 enum VarInfo {
     Int {
         var: Variable,
@@ -71,6 +72,16 @@ enum VarInfo {
         struct_name: String,
         is_mut: bool,
     },
+    Tuple {
+        slot: StackSlot,
+        elem_is_float: Vec<bool>,
+        is_mut: bool,
+    },
+    StructVec {
+        var: Variable,
+        struct_name: String,
+        is_mut: bool,
+    },
 }
 
 struct CompileEnv<'a> {
@@ -79,6 +90,7 @@ struct CompileEnv<'a> {
     print_struct_ref: cranelift::codegen::ir::FuncRef,
     str_new_ref: cranelift::codegen::ir::FuncRef,
     str_push_int_ref: cranelift::codegen::ir::FuncRef,
+    str_push_float_ref: cranelift::codegen::ir::FuncRef,
     str_push_str_ref: cranelift::codegen::ir::FuncRef,
     str_print_ref: cranelift::codegen::ir::FuncRef,
     str_free_ref: cranelift::codegen::ir::FuncRef,
@@ -92,6 +104,11 @@ struct CompileEnv<'a> {
     vec_set_ref: cranelift::codegen::ir::FuncRef,
     vec_len_ref: cranelift::codegen::ir::FuncRef,
     vec_free_ref: cranelift::codegen::ir::FuncRef,
+    svec_new_ref: cranelift::codegen::ir::FuncRef,
+    svec_push_ref: cranelift::codegen::ir::FuncRef,
+    svec_get_ptr_ref: cranelift::codegen::ir::FuncRef,
+    svec_len_ref: cranelift::codegen::ir::FuncRef,
+    svec_clear_ref: cranelift::codegen::ir::FuncRef,
     literals: &'a mut Vec<Box<[u8]>>,
     user_enums: &'a HashMap<String, i64>,
     structs: &'a HashMap<String, Box<StructDef>>,
@@ -124,6 +141,10 @@ impl JitCompiler {
             lang_runtime::striv_str_push_int as *const u8,
         );
         builder.symbol(
+            "striv_str_push_float",
+            lang_runtime::striv_str_push_float as *const u8,
+        );
+        builder.symbol(
             "striv_str_push_str",
             lang_runtime::striv_str_push_str as *const u8,
         );
@@ -146,13 +167,20 @@ impl JitCompiler {
         builder.symbol("striv_vec_set", lang_runtime::striv_vec_set as *const u8);
         builder.symbol("striv_vec_len", lang_runtime::striv_vec_len as *const u8);
         builder.symbol("striv_vec_free", lang_runtime::striv_vec_free as *const u8);
-        builder.symbol("striv_clear", lang_runtime::striv_clear as *const u8);
-        builder.symbol("striv_rect", lang_runtime::striv_rect as *const u8);
-        builder.symbol("striv_key_down", lang_runtime::striv_key_down as *const u8);
+        builder.symbol("striv_svec_new", lang_runtime::striv_svec_new as *const u8);
+        builder.symbol("striv_svec_push", lang_runtime::striv_svec_push as *const u8);
+        builder.symbol("striv_svec_get_ptr", lang_runtime::striv_svec_get_ptr as *const u8);
+        builder.symbol("striv_svec_len", lang_runtime::striv_svec_len as *const u8);
+        builder.symbol("striv_svec_clear", lang_runtime::striv_svec_clear as *const u8);
+        builder.symbol("striv_svec_free", lang_runtime::striv_svec_free as *const u8);
         builder.symbol("striv_set_err", lang_runtime::striv_set_err as *const u8);
         builder.symbol("striv_take_err", lang_runtime::striv_take_err as *const u8);
         for &(_, c_sym, ptr, _) in lang_runtime::generated_bridge::exported_symbols() {
             builder.symbol(c_sym, ptr);
+        }
+        for (s_name, ptr, _, _) in lang_runtime::std_collection_symbols() {
+            let sym = format!("striv_std_{}", s_name.replace("::", "__"));
+            builder.symbol(&sym, ptr);
         }
 
         Self {
@@ -203,6 +231,14 @@ impl JitCompiler {
         let str_push_int_id = self
             .module
             .declare_function("striv_str_push_int", Linkage::Import, &sig_push)
+            .unwrap();
+        let mut sig_push_float = self.module.make_signature();
+        sig_push_float.params.push(AbiParam::new(int_ty));
+        sig_push_float.params.push(AbiParam::new(types::F64));
+        sig_push_float.returns.push(AbiParam::new(int_ty));
+        let str_push_float_id = self
+            .module
+            .declare_function("striv_str_push_float", Linkage::Import, &sig_push_float)
             .unwrap();
         let str_push_str_id = self
             .module
@@ -275,24 +311,25 @@ impl JitCompiler {
             .module
             .declare_function("striv_vec_free", Linkage::Import, &sig_int)
             .unwrap();
-
-        let clear_id = self
+        let svec_new_id = self
             .module
-            .declare_function("striv_clear", Linkage::Import, &sig_push)
+            .declare_function("striv_svec_new", Linkage::Import, &sig_tweak_str)
             .unwrap();
-        let key_id = self
+        let svec_push_id = self
             .module
-            .declare_function("striv_key_down", Linkage::Import, &sig_push)
+            .declare_function("striv_svec_push", Linkage::Import, &sig_push)
             .unwrap();
-
-        let mut sig_rect = self.module.make_signature();
-        for _ in 0..6 {
-            sig_rect.params.push(AbiParam::new(int_ty));
-        }
-        sig_rect.returns.push(AbiParam::new(int_ty));
-        let rect_id = self
+        let svec_get_ptr_id = self
             .module
-            .declare_function("striv_rect", Linkage::Import, &sig_rect)
+            .declare_function("striv_svec_get_ptr", Linkage::Import, &sig_push)
+            .unwrap();
+        let svec_len_id = self
+            .module
+            .declare_function("striv_svec_len", Linkage::Import, &sig_tweak_str)
+            .unwrap();
+        let svec_clear_id = self
+            .module
+            .declare_function("striv_svec_clear", Linkage::Import, &sig_tweak_str)
             .unwrap();
 
         let set_err_id = self
@@ -322,8 +359,9 @@ impl JitCompiler {
         let mut func_ids = Vec::new();
         for func in &prog.functions {
             let mut sig = self.module.make_signature();
-            for _ in &func.params {
-                sig.params.push(AbiParam::new(int_ty)); // Integer or 8-byte struct pointer
+            for (_, p_ty, _) in &func.params {
+                let abi_ty = if p_ty == "float" { types::F64 } else { int_ty };
+                sig.params.push(AbiParam::new(abi_ty)); // Integer, float, or 8-byte struct pointer
             }
             sig.returns.push(AbiParam::new(int_ty));
             let id = self
@@ -337,8 +375,9 @@ impl JitCompiler {
         let mut func_ctx = FunctionBuilderContext::new();
         for (i, func) in prog.functions.iter().enumerate() {
             let mut ctx = self.module.make_context();
-            for _ in &func.params {
-                ctx.func.signature.params.push(AbiParam::new(int_ty));
+            for (_, p_ty, _) in &func.params {
+                let abi_ty = if p_ty == "float" { types::F64 } else { int_ty };
+                ctx.func.signature.params.push(AbiParam::new(abi_ty));
             }
             ctx.func.signature.returns.push(AbiParam::new(int_ty));
 
@@ -355,38 +394,71 @@ impl JitCompiler {
                     let param_meta = f.params.iter().map(|(_, ty, m)| (ty.clone(), *m)).collect();
                     funcs_map.insert(f.name.clone(), (f_ref, param_meta));
                 }
-                let clear_ref = self.module.declare_func_in_func(clear_id, builder.func);
-                let key_ref = self.module.declare_func_in_func(key_id, builder.func);
-                let rect_ref = self.module.declare_func_in_func(rect_id, builder.func);
-                funcs_map.insert(
-                    "clear".to_string(),
-                    (clear_ref, vec![("int".into(), false); 2]),
-                );
-                funcs_map.insert(
-                    "key_down".to_string(),
-                    (key_ref, vec![("int".into(), false); 2]),
-                );
-                funcs_map.insert(
-                    "draw_rect".to_string(),
-                    (rect_ref, vec![("int".into(), false); 6]),
-                );
-                for &(striv_name, c_sym, _, param_count) in
+                for &(striv_name, c_sym, _, sig_str) in
                     lang_runtime::generated_bridge::exported_symbols()
                 {
+                    let (params_s, ret_s) = sig_str.split_once("->").unwrap_or((sig_str, "i"));
                     let mut sig_ext = self.module.make_signature();
-                    for _ in 0..param_count {
-                        sig_ext.params.push(AbiParam::new(int_ty));
+                    for ch in params_s.chars() {
+                        let ty = if ch == 'f' { types::F64 } else { int_ty };
+                        sig_ext.params.push(AbiParam::new(ty));
                     }
-                    sig_ext.returns.push(AbiParam::new(int_ty));
+                    let ret_ty = if ret_s.starts_with('f') {
+                        types::F64
+                    } else {
+                        int_ty
+                    };
+                    sig_ext.returns.push(AbiParam::new(ret_ty));
                     let ext_id = self
                         .module
                         .declare_function(c_sym, Linkage::Import, &sig_ext)
                         .unwrap();
                     let ext_ref = self.module.declare_func_in_func(ext_id, builder.func);
-                    funcs_map.insert(
-                        striv_name.to_string(),
-                        (ext_ref, vec![("int".into(), false); param_count]),
-                    );
+                    let param_types = params_s
+                        .chars()
+                        .map(|ch| {
+                            if ch == 'f' {
+                                ("float".into(), false)
+                            } else {
+                                ("int".into(), false)
+                            }
+                        })
+                        .collect();
+                    funcs_map.insert(striv_name.to_string(), (ext_ref, param_types));
+                }
+                for (s_name, _, sig_str, mut_self) in lang_runtime::std_collection_symbols() {
+                    let sym = format!("striv_std_{}", s_name.replace("::", "__"));
+                    let (params_s, ret_s) = sig_str.split_once("->").unwrap_or((sig_str, "i"));
+                    let mut sig_std = self.module.make_signature();
+                    for ch in params_s.chars() {
+                        let ty = if ch == 'f' { types::F64 } else { int_ty };
+                        sig_std.params.push(AbiParam::new(ty));
+                    }
+                    let ret_ty = if ret_s.starts_with('f') {
+                        types::F64
+                    } else {
+                        int_ty
+                    };
+                    sig_std.returns.push(AbiParam::new(ret_ty));
+                    let std_id = self
+                        .module
+                        .declare_function(&sym, Linkage::Import, &sig_std)
+                        .unwrap();
+                    let std_ref = self.module.declare_func_in_func(std_id, builder.func);
+                    let mut param_types: Vec<(String, bool)> = params_s
+                        .chars()
+                        .map(|ch| {
+                            if ch == 'f' {
+                                ("float".into(), false)
+                            } else {
+                                ("int".into(), false)
+                            }
+                        })
+                        .collect();
+                    if mut_self && !param_types.is_empty() {
+                        param_types[0].1 = true;
+                    }
+                    funcs_map.insert(s_name.replace("::", "__"), (std_ref, param_types));
                 }
 
                 let mut env = CompileEnv {
@@ -399,6 +471,9 @@ impl JitCompiler {
                     str_push_int_ref: self
                         .module
                         .declare_func_in_func(str_push_int_id, builder.func),
+                    str_push_float_ref: self
+                        .module
+                        .declare_func_in_func(str_push_float_id, builder.func),
                     str_push_str_ref: self
                         .module
                         .declare_func_in_func(str_push_str_id, builder.func),
@@ -418,6 +493,13 @@ impl JitCompiler {
                     vec_set_ref: self.module.declare_func_in_func(vec_set_id, builder.func),
                     vec_len_ref: self.module.declare_func_in_func(vec_len_id, builder.func),
                     vec_free_ref: self.module.declare_func_in_func(vec_free_id, builder.func),
+                    svec_new_ref: self.module.declare_func_in_func(svec_new_id, builder.func),
+                    svec_push_ref: self.module.declare_func_in_func(svec_push_id, builder.func),
+                    svec_get_ptr_ref: self
+                        .module
+                        .declare_func_in_func(svec_get_ptr_id, builder.func),
+                    svec_len_ref: self.module.declare_func_in_func(svec_len_id, builder.func),
+                    svec_clear_ref: self.module.declare_func_in_func(svec_clear_id, builder.func),
                     literals: &mut self.kept_literals,
                     user_enums: &user_enums,
                     structs: &self.kept_structs,
@@ -426,7 +508,12 @@ impl JitCompiler {
 
                 let mut vars: HashMap<String, VarInfo> = HashMap::new();
                 for (idx, (name, ty_name, is_mut)) in func.params.iter().enumerate() {
-                    let var = builder.declare_var(int_ty);
+                    let var_ty = if ty_name == "float" {
+                        types::F64
+                    } else {
+                        int_ty
+                    };
+                    let var = builder.declare_var(var_ty);
                     let val = builder.block_params(entry)[idx];
                     builder.def_var(var, val);
                     if ty_name == "String" {
@@ -437,10 +524,29 @@ impl JitCompiler {
                                 is_mut: *is_mut,
                             },
                         );
+                    } else if let Some(inner_s) =
+                        ty_name.strip_prefix("Vec<").and_then(|s| s.strip_suffix('>'))
+                    {
+                        vars.insert(
+                            name.clone(),
+                            VarInfo::StructVec {
+                                var,
+                                struct_name: inner_s.to_string(),
+                                is_mut: *is_mut,
+                            },
+                        );
                     } else if ty_name == "Vec" {
                         vars.insert(
                             name.clone(),
                             VarInfo::Vec {
+                                var,
+                                is_mut: *is_mut,
+                            },
+                        );
+                    } else if ty_name == "float" {
+                        vars.insert(
+                            name.clone(),
+                            VarInfo::Float {
                                 var,
                                 is_mut: *is_mut,
                             },
@@ -628,7 +734,13 @@ fn compile_call(
             }
         }
         let mut val = compile_expr(arg, builder, vars, env);
-        if builder.func.dfg.value_type(val) == types::F64 {
+        let expects_float = param_meta
+            .get(i)
+            .map(|(ty, _)| ty == "float")
+            .unwrap_or(false);
+        if expects_float {
+            val = to_f64(val, builder);
+        } else if builder.func.dfg.value_type(val) == types::F64 {
             val = builder.ins().fcvt_to_sint_sat(env.int_ty, val);
         }
         arg_vals.push(val);
@@ -646,17 +758,80 @@ fn compile_method_call(
     vars: &HashMap<String, VarInfo>,
     env: &mut CompileEnv,
 ) -> Value {
+    if let Some(VarInfo::StructVec {
+        var,
+        struct_name,
+        is_mut,
+    }) = vars.get(receiver).cloned()
+    {
+        let vec_ptr = builder.use_var(var);
+        return match method {
+            "len" => {
+                let c = builder.ins().call(env.svec_len_ref, &[vec_ptr]);
+                builder.inst_results(c)[0]
+            }
+            "clear" => {
+                assert!(is_mut, "Error: '{}' must be `mut` for `.clear()`!", receiver);
+                let c = builder.ins().call(env.svec_clear_ref, &[vec_ptr]);
+                builder.inst_results(c)[0]
+            }
+            "push" => {
+                assert!(is_mut, "Error: '{}' must be `mut` for `.push()`!", receiver);
+                let arg = &args[0];
+                let src_addr = match arg {
+                    Expr::StructInit {
+                        name: s_name,
+                        fields,
+                    } => {
+                        assert_eq!(s_name, &struct_name, "Wrong struct type in push()");
+                        let def = env.structs.get(s_name).unwrap().clone();
+                        let slot = builder.create_sized_stack_slot(StackSlotData::new(
+                            StackSlotKind::ExplicitSlot,
+                            (def.fields.len() * 8) as u32,
+                            3,
+                        ));
+                        for (f_name, f_expr) in fields {
+                            let mut v = compile_expr(f_expr, builder, vars, env);
+                            if field_is_float(&def, f_name) {
+                                v = to_f64(v, builder);
+                            }
+                            let off = field_offset(&def, f_name);
+                            builder.ins().stack_store(env.int_ty, v, slot, off);
+                        }
+                        builder.ins().stack_addr(env.int_ty, slot, 0)
+                    }
+                    Expr::Var(vn) => match vars.get(vn) {
+                        Some(VarInfo::Struct { slot, .. }) => {
+                            builder.ins().stack_addr(env.int_ty, *slot, 0)
+                        }
+                        Some(VarInfo::StructPtr { ptr_var, .. }) => builder.use_var(*ptr_var),
+                        _ => panic!("Expected '{}' in push()", struct_name),
+                    },
+                    _ => panic!("Expected struct '{}' in push()", struct_name),
+                };
+                let c = builder.ins().call(env.svec_push_ref, &[vec_ptr, src_addr]);
+                builder.inst_results(c)[0]
+            }
+            _ => panic!("Unknown method '.{}()' on Vec<{}>", method, struct_name),
+        };
+    }
     if let Some(VarInfo::Handle { var, type_name, .. }) = vars.get(receiver) {
         let full_name = format!("{}__{}", type_name, method);
-        let (func_ref, _) = env
+        let (func_ref, param_meta) = env
             .funcs
             .get(&full_name)
             .unwrap_or_else(|| panic!("Unknown method '{}' on '{}'", method, type_name))
             .clone();
         let mut arg_vals = vec![builder.use_var(*var)];
-        for arg in args {
+        for (i, arg) in args.iter().enumerate() {
             let mut val = compile_expr(arg, builder, vars, env);
-            if builder.func.dfg.value_type(val) == types::F64 {
+            let expects_float = param_meta
+                .get(i + 1)
+                .map(|(ty, _)| ty == "float")
+                .unwrap_or(false);
+            if expects_float {
+                val = to_f64(val, builder);
+            } else if builder.func.dfg.value_type(val) == types::F64 {
                 val = builder.ins().fcvt_to_sint_sat(env.int_ty, val);
             }
             arg_vals.push(val);
@@ -717,11 +892,85 @@ fn compile_stmt(
     owned_vecs: &mut Vec<Variable>,
 ) -> bool {
     match stmt {
+        Stmt::LetTuple { names, value } => {
+            if let Expr::Tuple(items) = value {
+                assert_eq!(names.len(), items.len(), "Tuple length mismatch");
+                for ((n, is_mut), item) in names.iter().zip(items.iter()) {
+                    let val = compile_expr(item, builder, vars, env);
+                    let ty = builder.func.dfg.value_type(val);
+                    let var = builder.declare_var(ty);
+                    builder.def_var(var, val);
+                    if ty == types::F64 {
+                        vars.insert(
+                            n.clone(),
+                            VarInfo::Float {
+                                var,
+                                is_mut: *is_mut,
+                            },
+                        );
+                    } else {
+                        vars.insert(
+                            n.clone(),
+                            VarInfo::Int {
+                                var,
+                                is_mut: *is_mut,
+                            },
+                        );
+                    }
+                }
+            } else {
+                let base_ptr = compile_expr(value, builder, vars, env);
+                for (i, (n, is_mut)) in names.iter().enumerate() {
+                    let val = builder.ins().load(
+                        env.int_ty,
+                        MemFlagsData::new(),
+                        base_ptr,
+                        (i * 8) as i32,
+                    );
+                    let var = builder.declare_var(env.int_ty);
+                    builder.def_var(var, val);
+                    vars.insert(
+                        n.clone(),
+                        VarInfo::Int {
+                            var,
+                            is_mut: *is_mut,
+                        },
+                    );
+                }
+            }
+            false
+        }
         Stmt::Let {
             name,
+            ty_hint,
             is_mut,
             value,
         } => {
+            if let Some(inner_s) = ty_hint
+                .as_deref()
+                .and_then(|t| t.strip_prefix("Vec<"))
+                .and_then(|t| t.strip_suffix('>'))
+            {
+                let def = env
+                    .structs
+                    .get(inner_s)
+                    .unwrap_or_else(|| panic!("Unknown struct in Vec<{}>", inner_s));
+                let elem_bytes = (def.fields.len() * 8) as i64;
+                let size_val = builder.ins().iconst(env.int_ty, elem_bytes);
+                let call = builder.ins().call(env.svec_new_ref, &[size_val]);
+                let ptr = builder.inst_results(call)[0];
+                let var = builder.declare_var(env.int_ty);
+                builder.def_var(var, ptr);
+                vars.insert(
+                    name.clone(),
+                    VarInfo::StructVec {
+                        var,
+                        struct_name: inner_s.to_string(),
+                        is_mut: *is_mut,
+                    },
+                );
+                return false;
+            }
             // Case A: Allocate a new struct on the stack
             if let Expr::StructInit {
                 name: s_name,
@@ -754,6 +1003,29 @@ fn compile_stmt(
                     VarInfo::Struct {
                         slot,
                         struct_name: s_name.clone(),
+                        is_mut: *is_mut,
+                    },
+                );
+            } else if let Expr::Tuple(items) = value {
+                let slot = builder.create_sized_stack_slot(StackSlotData::new(
+                    StackSlotKind::ExplicitSlot,
+                    (items.len() * 8) as u32,
+                    3,
+                ));
+                let mut elem_is_float = Vec::new();
+                for (i, item) in items.iter().enumerate() {
+                    let val = compile_expr(item, builder, vars, env);
+                    let is_f = builder.func.dfg.value_type(val) == types::F64;
+                    elem_is_float.push(is_f);
+                    builder
+                        .ins()
+                        .stack_store(env.int_ty, val, slot, (i * 8) as i32);
+                }
+                vars.insert(
+                    name.clone(),
+                    VarInfo::Tuple {
+                        slot,
+                        elem_is_float,
                         is_mut: *is_mut,
                     },
                 );
@@ -841,6 +1113,14 @@ fn compile_stmt(
         Stmt::FieldAssign { var, field, value } => {
             let mut val = compile_expr(value, builder, vars, env);
             match vars.get(var).cloned() {
+                Some(VarInfo::Tuple { slot, is_mut, .. }) => {
+                    assert!(is_mut, "Error: tuple '{}' is not `mut`!", var);
+                    let idx = tuple_field_index(field)
+                        .unwrap_or_else(|| panic!("Unknown tuple field '.{}'", field));
+                    builder
+                        .ins()
+                        .stack_store(env.int_ty, val, slot, (idx * 8) as i32);
+                }
                 Some(VarInfo::Struct {
                     slot,
                     struct_name,
@@ -915,7 +1195,10 @@ fn compile_stmt(
                     _ => {}
                 }
             }
-            let val = compile_expr(expr, builder, vars, env);
+            let mut val = compile_expr(expr, builder, vars, env);
+            if builder.func.dfg.value_type(val) == types::F64 {
+                val = builder.ins().fcvt_to_sint_sat(env.int_ty, val);
+            }
             builder.ins().call(env.print_int_ref, &[val]);
             false
         }
@@ -1093,6 +1376,110 @@ fn compile_stmt(
             };
             compile_stmt(&desugared, builder, vars, env, owned_strings, owned_vecs)
         }
+        Stmt::ForEach {
+            var,
+            is_mut,
+            collection,
+            body,
+        } => {
+            let coll_info = vars
+                .get(collection)
+                .cloned()
+                .unwrap_or_else(|| panic!("Unknown list '{}' in `for`", collection));
+
+            let (vec_ptr, len_val, is_struct_elem) = match &coll_info {
+                VarInfo::StructVec {
+                    var: v_var,
+                    struct_name,
+                    is_mut: coll_mut,
+                } => {
+                    if *is_mut {
+                        assert!(
+                            *coll_mut,
+                            "Error: list '{}' must be `mut` for `for mut {}`!",
+                            collection, var
+                        );
+                    }
+                    let vp = builder.use_var(*v_var);
+                    let c = builder.ins().call(env.svec_len_ref, &[vp]);
+                    (vp, builder.inst_results(c)[0], Some(struct_name.clone()))
+                }
+                VarInfo::Vec { var: v_var, .. } => {
+                    let vp = builder.use_var(*v_var);
+                    let c = builder.ins().call(env.vec_len_ref, &[vp]);
+                    (vp, builder.inst_results(c)[0], None)
+                }
+                _ => panic!("'{}' is not an iterable Vec list!", collection),
+            };
+
+            let idx_var = builder.declare_var(env.int_ty);
+            let zero = builder.ins().iconst(env.int_ty, 0);
+            builder.def_var(idx_var, zero);
+
+            let elem_var = builder.declare_var(env.int_ty);
+            if let Some(s_name) = &is_struct_elem {
+                vars.insert(
+                    var.clone(),
+                    VarInfo::StructPtr {
+                        ptr_var: elem_var,
+                        struct_name: s_name.clone(),
+                        is_mut: *is_mut,
+                    },
+                );
+            } else {
+                vars.insert(
+                    var.clone(),
+                    VarInfo::Int {
+                        var: elem_var,
+                        is_mut: *is_mut,
+                    },
+                );
+            }
+
+            let header_bb = builder.create_block();
+            let body_bb = builder.create_block();
+            let exit_bb = builder.create_block();
+
+            builder.ins().jump(header_bb, &[]);
+            builder.switch_to_block(header_bb);
+
+            let curr_idx = builder.use_var(idx_var);
+            let cond = builder.ins().icmp(IntCC::SignedLessThan, curr_idx, len_val);
+            builder.ins().brif(cond, body_bb, &[], exit_bb, &[]);
+
+            builder.switch_to_block(body_bb);
+            builder.seal_block(body_bb);
+
+            let elem_val = if is_struct_elem.is_some() {
+                let c = builder
+                    .ins()
+                    .call(env.svec_get_ptr_ref, &[vec_ptr, curr_idx]);
+                builder.inst_results(c)[0]
+            } else {
+                let c = builder.ins().call(env.vec_get_ref, &[vec_ptr, curr_idx]);
+                builder.inst_results(c)[0]
+            };
+            builder.def_var(elem_var, elem_val);
+
+            let mut body_ret = false;
+            for s in body {
+                if compile_stmt(s, builder, vars, env, owned_strings, owned_vecs) {
+                    body_ret = true;
+                    break;
+                }
+            }
+            if !body_ret {
+                let cur = builder.use_var(idx_var);
+                let next_idx = builder.ins().iadd_imm_s(cur, 1);
+                builder.def_var(idx_var, next_idx);
+                builder.ins().jump(header_bb, &[]);
+            }
+            builder.seal_block(header_bb);
+
+            builder.switch_to_block(exit_bb);
+            builder.seal_block(exit_bb);
+            false
+        }
         Stmt::ForRange {
             var,
             start,
@@ -1140,60 +1527,6 @@ fn compile_stmt(
             }
             builder.seal_block(header_bb);
 
-            builder.switch_to_block(exit_bb);
-            builder.seal_block(exit_bb);
-            false
-        }
-        Stmt::Match { target, arms } => {
-            let target_val = compile_expr(target, builder, vars, env);
-            let exit_bb = builder.create_block();
-
-            for (pat, body) in arms {
-                match pat {
-                    striv_syntax::MatchPat::Wildcard => {
-                        let mut ret = false;
-                        for s in body {
-                            if compile_stmt(s, builder, vars, env, owned_strings, owned_vecs) {
-                                ret = true;
-                                break;
-                            }
-                        }
-                        if !ret {
-                            builder.ins().jump(exit_bb, &[]);
-                        }
-                        let after_wild = builder.create_block();
-                        builder.switch_to_block(after_wild);
-                        builder.seal_block(after_wild);
-                        break;
-                    }
-                    striv_syntax::MatchPat::Expr(pat_expr) => {
-                        let pat_val = compile_expr(pat_expr, builder, vars, env);
-                        let cond = builder.ins().icmp(IntCC::Equal, target_val, pat_val);
-
-                        let arm_bb = builder.create_block();
-                        let next_bb = builder.create_block();
-                        builder.ins().brif(cond, arm_bb, &[], next_bb, &[]);
-
-                        builder.switch_to_block(arm_bb);
-                        builder.seal_block(arm_bb);
-                        let mut ret = false;
-                        for s in body {
-                            if compile_stmt(s, builder, vars, env, owned_strings, owned_vecs) {
-                                ret = true;
-                                break;
-                            }
-                        }
-                        if !ret {
-                            builder.ins().jump(exit_bb, &[]);
-                        }
-
-                        builder.switch_to_block(next_bb);
-                        builder.seal_block(next_bb);
-                    }
-                }
-            }
-
-            builder.ins().jump(exit_bb, &[]);
             builder.switch_to_block(exit_bb);
             builder.seal_block(exit_bb);
             false
@@ -1352,11 +1685,12 @@ fn compile_expr(
                                 continue;
                             }
                         }
-                        let mut num = compile_expr(inner, builder, vars, env);
-                        if builder.func.dfg.value_type(num) == types::F64 {
-                            num = builder.ins().fcvt_to_sint_sat(env.int_ty, num);
-                        }
-                        let c = builder.ins().call(env.str_push_int_ref, &[s_ptr, num]);
+                        let num = compile_expr(inner, builder, vars, env);
+                        let c = if builder.func.dfg.value_type(num) == types::F64 {
+                            builder.ins().call(env.str_push_float_ref, &[s_ptr, num])
+                        } else {
+                            builder.ins().call(env.str_push_int_ref, &[s_ptr, num])
+                        };
                         s_ptr = builder.inst_results(c)[0];
                     }
                 }
@@ -1411,10 +1745,56 @@ fn compile_expr(
                 let addr = builder.use_var(*ptr_var);
                 builder.ins().load(ty, MemFlagsData::new(), addr, offset)
             }
+            Some(VarInfo::Tuple {
+                slot,
+                elem_is_float,
+                ..
+            }) => {
+                let idx = tuple_field_index(field).unwrap_or_else(|| {
+                    panic!(
+                        "Unknown tuple field '.{}' (use .x/.y/.z/.w or .0/.1)",
+                        field
+                    )
+                });
+                let ty = if *elem_is_float.get(idx).unwrap_or(&false) {
+                    types::F64
+                } else {
+                    env.int_ty
+                };
+                builder
+                    .ins()
+                    .stack_load(env.int_ty, ty, *slot, (idx * 8) as i32)
+            }
             _ => panic!("'{}' is not a struct!", var),
         },
         Expr::StructInit { .. } => {
             panic!("StructInit must currently be assigned to a `let` variable")
+        }
+        Expr::Tuple(_) => {
+            panic!("Tuple literal must currently be assigned to a `let` variable")
+        }
+        Expr::TupleIndex { tuple, idx } => {
+            if let Expr::Var(v_name) = &**tuple {
+                if let Some(VarInfo::Tuple {
+                    slot,
+                    elem_is_float,
+                    ..
+                }) = vars.get(v_name)
+                {
+                    let ty = if *elem_is_float.get(*idx).unwrap_or(&false) {
+                        types::F64
+                    } else {
+                        env.int_ty
+                    };
+                    return builder
+                        .ins()
+                        .stack_load(env.int_ty, ty, *slot, (*idx * 8) as i32);
+                }
+            }
+            panic!(
+                "Tuple access `.{}` is only supported on tuple variables",
+                idx
+            );
         }
         Expr::BinOp { left, op, right } => {
             let l = compile_expr(left, builder, vars, env);
@@ -1453,12 +1833,12 @@ fn compile_expr(
                         let lb = if builder.func.dfg.value_type(l) == types::I8 {
                             l
                         } else {
-                            builder.ins().icmp_imm(IntCC::NotEqual, l, 0)
+                            builder.ins().icmp_imm_s(IntCC::NotEqual, l, 0)
                         };
                         let rb = if builder.func.dfg.value_type(r) == types::I8 {
                             r
                         } else {
-                            builder.ins().icmp_imm(IntCC::NotEqual, r, 0)
+                            builder.ins().icmp_imm_s(IntCC::NotEqual, r, 0)
                         };
                         builder.ins().band(lb, rb)
                     }
@@ -1466,12 +1846,12 @@ fn compile_expr(
                         let lb = if builder.func.dfg.value_type(l) == types::I8 {
                             l
                         } else {
-                            builder.ins().icmp_imm(IntCC::NotEqual, l, 0)
+                            builder.ins().icmp_imm_s(IntCC::NotEqual, l, 0)
                         };
                         let rb = if builder.func.dfg.value_type(r) == types::I8 {
                             r
                         } else {
-                            builder.ins().icmp_imm(IntCC::NotEqual, r, 0)
+                            builder.ins().icmp_imm_s(IntCC::NotEqual, r, 0)
                         };
                         builder.ins().bor(lb, rb)
                     }
@@ -1487,7 +1867,17 @@ fn compile_expr(
     }
 }
 
-fn eval_comptime_consts(prog: &Program) -> HashMap<String, i64> {
+fn tuple_field_index(field: &str) -> Option<usize> {
+    match field {
+        "x" | "r" | "width" | "min" => Some(0),
+        "y" | "g" | "height" | "max" => Some(1),
+        "z" | "b" | "depth" => Some(2),
+        "w" | "a" => Some(3),
+        _ => None,
+    }
+}
+
+pub fn eval_comptime_consts(prog: &Program) -> HashMap<String, i64> {
     let mut const_vals = HashMap::new();
     for (c_name, c_expr) in &prog.consts {
         let mut funcs: Vec<striv_syntax::Function> = prog

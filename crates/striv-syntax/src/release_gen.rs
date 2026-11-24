@@ -1,7 +1,14 @@
 use crate::{AssignTarget, Expr, Function, MatchPat, Op, Program, Stmt, StringPart, TweakVal};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 pub fn transpile_to_rust(prog: &Program) -> String {
+    transpile_to_rust_with_consts(prog, &HashMap::new())
+}
+
+pub fn transpile_to_rust_with_consts(
+    prog: &Program,
+    comptime_consts: &HashMap<String, i64>,
+) -> String {
     let mut out = String::from(
         "#![allow(unused_variables, unused_mut, non_snake_case, non_upper_case_globals, dead_code, unused_imports)]\n\n",
     );
@@ -28,11 +35,15 @@ pub fn transpile_to_rust(prog: &Program) -> String {
     }
 
     for (name, expr) in &prog.consts {
-        out.push_str(&format!(
-            "const {}: i64 = {};\n",
-            name,
-            emit_expr(expr, &struct_names)
-        ));
+        if let Some(&val) = comptime_consts.get(name) {
+            out.push_str(&format!("const {}: i64 = {}i64;\n", name, val));
+        } else {
+            out.push_str(&format!(
+                "const {}: i64 = {};\n",
+                name,
+                emit_expr(expr, &struct_names)
+            ));
+        }
     }
     if !prog.consts.is_empty() {
         out.push('\n');
@@ -146,8 +157,27 @@ fn emit_fn(f: &Function, name: &str, structs: &HashSet<String>, level: usize, ou
 fn emit_stmt(stmt: &Stmt, structs: &HashSet<String>, level: usize, out: &mut String) {
     let ind = "    ".repeat(level);
     match stmt {
+        Stmt::LetTuple { names, value } => {
+            let parts: Vec<String> = names
+                .iter()
+                .map(|(n, is_mut)| {
+                    if *is_mut {
+                        format!("mut {}", n)
+                    } else {
+                        n.clone()
+                    }
+                })
+                .collect();
+            out.push_str(&format!(
+                "{}let ({}) = {};\n",
+                ind,
+                parts.join(", "),
+                emit_expr(value, structs)
+            ));
+        }
         Stmt::Let {
             name,
+            ty_hint: _,
             is_mut,
             value,
         } => {
@@ -277,6 +307,19 @@ fn emit_stmt(stmt: &Stmt, structs: &HashSet<String>, level: usize, out: &mut Str
             }
             out.push_str(&format!("{}}}\n", ind));
         }
+        Stmt::ForEach {
+            var,
+            is_mut,
+            collection,
+            body,
+        } => {
+            let iter_fn = if *is_mut { "iter_mut" } else { "iter" };
+            out.push_str(&format!("{}for {} in {}.{}() {{\n", ind, var, collection, iter_fn));
+            for s in body {
+                emit_stmt(s, structs, level + 1, out);
+            }
+            out.push_str(&format!("{}}}\n", ind));
+        }
         Stmt::ForRange {
             var,
             start,
@@ -316,6 +359,18 @@ fn emit_stmt(stmt: &Stmt, structs: &HashSet<String>, level: usize, out: &mut Str
     }
 }
 
+fn emit_bool_expr(expr: &Expr, structs: &HashSet<String>) -> String {
+    if let Expr::BinOp { op, .. } = expr {
+        if matches!(
+            op,
+            Op::Lt | Op::Gt | Op::LtEq | Op::GtEq | Op::Eq | Op::NotEq | Op::And | Op::Or
+        ) {
+            return emit_expr(expr, structs);
+        }
+    }
+    format!("({} != 0)", emit_expr(expr, structs))
+}
+
 fn emit_call_args(args: &[Expr], structs: &HashSet<String>) -> String {
     args.iter()
         .map(|a| emit_expr(a, structs))
@@ -352,6 +407,8 @@ fn emit_expr(expr: &Expr, structs: &HashSet<String>) -> String {
         Expr::FieldAccess { var, field } => format!("{}.{}", var, field),
         Expr::Index { var, index } => format!("{}[({}) as usize]", var, emit_expr(index, structs)),
         Expr::VecLit(items) => format!("vec![{}]", emit_call_args(items, structs)),
+        Expr::Tuple(items) => format!("({})", emit_call_args(items, structs)),
+        Expr::TupleIndex { tuple, idx } => format!("{}.{}", emit_expr(tuple, structs), idx),
         Expr::Call { name, args } => {
             format!(
                 "{}({})",
@@ -384,6 +441,15 @@ fn emit_expr(expr: &Expr, structs: &HashSet<String>) -> String {
         Expr::None => "None".to_string(),
         Expr::Try(e) => format!("{}?", emit_expr(e, structs)),
         Expr::BinOp { left, op, right } => {
+            if matches!(op, Op::And | Op::Or) {
+                let op_s = if *op == Op::And { "&&" } else { "||" };
+                return format!(
+                    "({} {} {})",
+                    emit_bool_expr(left, structs),
+                    op_s,
+                    emit_bool_expr(right, structs)
+                );
+            }
             let op_s = match op {
                 Op::Add => "+",
                 Op::Sub => "-",

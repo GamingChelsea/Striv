@@ -1,0 +1,82 @@
+use math_helpers
+
+tweak base_damage = 25
+
+const START_GOLD = fib(20)
+
+enum GameState {
+    Menu,
+    Playing,
+    GameOver,
+}
+
+struct Player {
+    hp: int,
+    x: float,
+    y: float,
+}
+
+impl Player {
+    fn move_by(mut self, dx: float, dy: float) {
+        self.x += dx
+        self.y += dy
+    }
+
+    fn take_damage(mut self, amount: int) {
+        self.hp -= amount
+    }
+}
+
+fn fib(n: int) -> int {
+    if n <= 1 {
+        return n
+    }
+    return fib(n - 1) + fib(n - 2)
+}
+
+fn main() -> int {
+    let active = 1
+    let paused = 0
+    if START_GOLD >= 5000 && START_GOLD != 0 && active && paused == 0 || 0 {
+        print("1. Comptime fib(20) = {START_GOLD}")
+    }
+    print("2. Tweak base_damage = {base_damage}")
+    let half = safe_div(100, 2)?
+    let bonus = find_bonus(300)?
+    print("3. Module + `?`: half={half}, bonus={bonus}")
+    let state = GameState::Playing
+    match state {
+        GameState::Menu => {
+            print("4. State: Menu")
+        }
+        GameState::Playing => {
+            print("4. State: Playing")
+        }
+        _ => {
+            print("4. State: GameOver")
+        }
+    }
+    let mut hero = Player { hp: 100, x: 10.0, y: 20.5 }
+    hero.move_by(5.5, 4.5)
+    hero.take_damage(base_damage)
+    print("5. Player: hp={hero.hp}, x={hero.x}")
+    let pos = (120.5, 340)
+    let (a, b) = (10, 25)
+    print("6. Tuple: ({pos.0}, {pos.1}), destructured sum={a + b}")
+    let mut scores = [10, 20, 30]
+    scores.push(40)
+    let mut total = 0
+    for i in 0..scores.len() {
+        total += scores[i]
+    }
+    let mut count = 0
+    while count < 3 {
+        count += 1
+    }
+    print("7. Vec len={scores.len()}, sum={total}, while={count}")
+    let title = "Striv"
+    print("8. Hello from {title}!")
+    while 1 {
+    }
+    return 0
+}

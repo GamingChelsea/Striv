@@ -1,6 +1,6 @@
 use std::{env, fs, mem, time::Instant};
 use striv_jit::JitCompiler;
-use striv_syntax::{Parser, format_program};
+use striv_syntax::format_source;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -11,7 +11,6 @@ fn main() {
             let path = args
                 .get(2)
                 .expect("Please provide a file: cargo run -p striv-cli -- run test.strv");
-            let source = fs::read_to_string(path).expect("Could not read file");
 
             let start = Instant::now();
             let prog = striv_syntax::load_program_with_imports(std::path::Path::new(path))
@@ -33,12 +32,10 @@ fn main() {
             let path = args
                 .get(2)
                 .expect("Please provide a file: cargo run -p striv-cli -- fmt test.strv");
-            let source = fs::read_to_string(path).expect("Could not read file");
 
             let start = Instant::now();
-            let prog = striv_syntax::load_program_with_imports(std::path::Path::new(path))
-                .expect("Failed to load program");
-            let formatted = format_program(&prog);
+            let source = fs::read_to_string(path).expect("Could not read file");
+            let formatted = format_source(&source);
             fs::write(path, formatted).expect("Could not save file");
             println!("Formatted '{}' in {:?}", path, start.elapsed());
         }
@@ -103,7 +100,6 @@ fn main() {
             let path = args
                 .get(2)
                 .expect("Please provide a file: striv-cli live test.strv");
-            let source = fs::read_to_string(path).expect("Could not read file");
 
             lang_runtime::start_tweak_server();
             let prog = striv_syntax::load_program_with_imports(std::path::Path::new(path))
@@ -131,7 +127,9 @@ fn main() {
             let start = Instant::now();
             let prog =
                 striv_syntax::load_program_with_imports(entry).expect("Failed to load modules");
-            let rust_code = striv_syntax::release_gen::transpile_to_rust(&prog);
+            let comptime_consts = striv_jit::eval_comptime_consts(&prog);
+            let rust_code =
+                striv_syntax::release_gen::transpile_to_rust_with_consts(&prog, &comptime_consts);
 
             let _ = fs::create_dir_all(".striv-release/src");
             let deps_section =

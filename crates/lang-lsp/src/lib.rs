@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use striv_syntax::{format_program, Parser};
+use striv_syntax::Parser;
 use tokio::sync::RwLock;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
@@ -65,6 +65,7 @@ impl LanguageServer for StrivLsp {
                 }),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 definition_provider: Some(OneOf::Left(true)),
+                document_symbol_provider: Some(OneOf::Left(true)),
                 inlay_hint_provider: Some(OneOf::Left(true)),
                 signature_help_provider: Some(SignatureHelpOptions {
                     trigger_characters: Some(vec!["(".to_string(), ",".to_string()]),
@@ -112,8 +113,8 @@ impl LanguageServer for StrivLsp {
 
         // Only format when the code currently parses without errors
         let parsed = catch_unwind(AssertUnwindSafe(|| Parser::new(src).parse_program()));
-        if let Ok(prog) = parsed {
-            let formatted = format_program(&prog);
+        if parsed.is_ok() {
+            let formatted = striv_syntax::format_source(src);
             let edit = TextEdit {
                 range: Range::new(Position::new(0, 0), Position::new(u32::MAX, 0)),
                 new_text: formatted,
@@ -326,6 +327,87 @@ impl LanguageServer for StrivLsp {
                 });
                 return Ok(Some(CompletionResponse::Array(items)));
             }
+            if visible
+                .iter()
+                .any(|(n, ty)| n == &var_name && ty == "Tuple")
+            {
+                for (i, (swiz, idx)) in [
+                    ("x", 0),
+                    ("y", 1),
+                    ("z", 2),
+                    ("w", 3),
+                ]
+                .iter()
+                .enumerate()
+                {
+                    items.push(CompletionItem {
+                        label: swiz.to_string(),
+                        kind: Some(CompletionItemKind::FIELD),
+                        detail: Some(format!("tuple .{}", idx)),
+                        sort_text: Some(format!("0_{}_{}", i, swiz)),
+                        ..Default::default()
+                    });
+                }
+                for idx in 0..2 {
+                    items.push(CompletionItem {
+                        label: idx.to_string(),
+                        kind: Some(CompletionItemKind::FIELD),
+                        detail: Some(format!("tuple element .{}", idx)),
+                        sort_text: Some(format!("1_{}", idx)),
+                        ..Default::default()
+                    });
+                }
+                for (i, (swiz, idx)) in [
+                    ("r", 0),
+                    ("g", 1),
+                    ("b", 2),
+                    ("a", 3),
+                ]
+                .iter()
+                .enumerate()
+                {
+                    items.push(CompletionItem {
+                        label: swiz.to_string(),
+                        kind: Some(CompletionItemKind::FIELD),
+                        detail: Some(format!("color .{}", idx)),
+                        sort_text: Some(format!("2_{}_{}", i, swiz)),
+                        ..Default::default()
+                    });
+                }
+                return Ok(Some(CompletionResponse::Array(items)));
+            }
+            if let Some((_, ty)) = visible.iter().find(|(n, _)| n == &var_name) {
+                let prefix = format!("{}__", ty);
+                let mut found_std = false;
+                for (s_name, _, sig_str, _) in lang_runtime::std_collection_symbols() {
+                    if let Some(m_name) = s_name.strip_prefix(&prefix) {
+                        found_std = true;
+                        let param_count =
+                            sig_str.split_once("->").map(|(p, _)| p.len()).unwrap_or(0);
+                        let snip = if param_count <= 1 {
+                            format!("{}()", m_name)
+                        } else {
+                            format!("{}($0)", m_name)
+                        };
+                        items.push(CompletionItem {
+                            label: m_name.to_string(),
+                            kind: Some(CompletionItemKind::METHOD),
+                            insert_text: Some(snip),
+                            insert_text_format: Some(InsertTextFormat::SNIPPET),
+                            detail: Some(format!(
+                                "std::{} ({})",
+                                s_name.replace("__", "."),
+                                sig_str
+                            )),
+                            sort_text: Some(format!("0_{}", m_name)),
+                            ..Default::default()
+                        });
+                    }
+                }
+                if found_std {
+                    return Ok(Some(CompletionResponse::Array(items)));
+                }
+            }
 
             if let Some(prog) = &parsed {
                 if let Some(struct_name) = infer_var_struct(src, &var_name, prog) {
@@ -376,11 +458,11 @@ impl LanguageServer for StrivLsp {
                         }
                     }
                 }
-                for (s_name, _, _, param_count) in
-                    lang_runtime::generated_bridge::exported_symbols()
-                {
+                for (s_name, _, _, sig_str) in lang_runtime::generated_bridge::exported_symbols() {
                     if let Some(m_name) = s_name.strip_prefix(&prefix) {
-                        let snip = if *param_count <= 1 {
+                        let param_count =
+                            sig_str.split_once("->").map(|(p, _)| p.len()).unwrap_or(0);
+                        let snip = if param_count <= 1 {
                             format!("{}()", m_name)
                         } else {
                             format!("{}($0)", m_name)
@@ -519,30 +601,6 @@ impl LanguageServer for StrivLsp {
                 ..Default::default()
             });
         }
-        for (fn_name, snip, detail) in [
-            ("clear", "clear($0)", "fn clear(win: int, color: int)"),
-            (
-                "draw_rect",
-                "draw_rect($0)",
-                "fn draw_rect(win: int, x: int, y: int, w: int, h: int, color: int)",
-            ),
-            (
-                "key_down",
-                "key_down($0)",
-                "fn key_down(win: int, key: int) -> int",
-            ),
-        ] {
-            items.push(CompletionItem {
-                label: fn_name.to_string(),
-                kind: Some(CompletionItemKind::FUNCTION),
-                insert_text: Some(snip.to_string()),
-                insert_text_format: Some(InsertTextFormat::SNIPPET),
-                detail: Some(detail.to_string()),
-                sort_text: Some(format!("1_{}", fn_name)),
-                ..Default::default()
-            });
-        }
-
         if let Some(prog) = &parsed {
             for e in &prog.enums {
                 items.push(CompletionItem {
@@ -654,6 +712,17 @@ impl LanguageServer for StrivLsp {
                 }
             }
         }
+        for (ty, _) in lang_runtime::std_drop_symbols() {
+            if seen_types.insert(ty) {
+                items.push(CompletionItem {
+                    label: ty.to_string(),
+                    kind: Some(CompletionItemKind::STRUCT),
+                    detail: Some("std collection".to_string()),
+                    sort_text: Some(format!("1_{}", ty)),
+                    ..Default::default()
+                });
+            }
+        }
         for (c_name, _) in lang_runtime::generated_bridge::exported_constants() {
             if let Some((ty, _)) = c_name.split_once("__") {
                 if seen_types.insert(ty) {
@@ -757,6 +826,107 @@ impl LanguageServer for StrivLsp {
                     range: None,
                 }));
             }
+            if let Some((c_name, c_expr)) = prog.consts.iter().find(|(n, _)| n == &token) {
+                return Ok(Some(Hover {
+                    contents: HoverContents::Markup(MarkupContent {
+                        kind: MarkupKind::Markdown,
+                        value: format!(
+                            "```striv\nconst {} = {}\n```\n*(comptime constant)*",
+                            c_name,
+                            striv_syntax::format_expr(c_expr)
+                        ),
+                    }),
+                    range: None,
+                }));
+            }
+            if let Some((t_name, t_val)) = prog.tweaks.iter().find(|(n, _)| n == &token) {
+                let val_s = match t_val {
+                    striv_syntax::TweakVal::Int(i) => i.to_string(),
+                    striv_syntax::TweakVal::Str(s) => format!("\"{}\"", s),
+                    striv_syntax::TweakVal::Vec(v) => format!("{:?}", v),
+                };
+                return Ok(Some(Hover {
+                    contents: HoverContents::Markup(MarkupContent {
+                        kind: MarkupKind::Markdown,
+                        value: format!(
+                            "```striv\ntweak {} = {}\n```\n*(live tweak)*",
+                            t_name, val_s
+                        ),
+                    }),
+                    range: None,
+                }));
+            }
+            if let Some((ty, member)) = token.split_once("::") {
+                if let Some(e) = prog.enums.iter().find(|e| e.name == ty) {
+                    if let Some(idx) = e.variants.iter().position(|v| v == member) {
+                        return Ok(Some(Hover {
+                            contents: HoverContents::Markup(MarkupContent {
+                                kind: MarkupKind::Markdown,
+                                value: format!("```striv\n{}::{} = {}\n```", e.name, member, idx),
+                            }),
+                            range: None,
+                        }));
+                    }
+                }
+            }
+            if let Some(e) = prog.enums.iter().find(|e| e.name == token) {
+                return Ok(Some(Hover {
+                    contents: HoverContents::Markup(MarkupContent {
+                        kind: MarkupKind::Markdown,
+                        value: format!(
+                            "```striv\nenum {} {{ {} }}\n```",
+                            e.name,
+                            e.variants.join(", ")
+                        ),
+                    }),
+                    range: None,
+                }));
+            }
+            if let Some(s) = prog.structs.iter().find(|s| s.name == token) {
+                let fields: Vec<String> = s
+                    .fields
+                    .iter()
+                    .map(|(f, ty)| format!("{}: {}", f, ty))
+                    .collect();
+                return Ok(Some(Hover {
+                    contents: HoverContents::Markup(MarkupContent {
+                        kind: MarkupKind::Markdown,
+                        value: format!(
+                            "```striv\nstruct {} {{ {} }}\n```",
+                            s.name,
+                            fields.join(", ")
+                        ),
+                    }),
+                    range: None,
+                }));
+            }
+            if let Some((recv, field)) = token.split_once('.') {
+                let visible = collect_visible_vars(&lines, pos.line as usize);
+                if let Some((_, ty)) = visible.iter().find(|(n, _)| n == recv) {
+                    if let Some(s) = prog.structs.iter().find(|s| &s.name == ty) {
+                        if let Some((_, f_ty)) = s.fields.iter().find(|(f, _)| f == field) {
+                            return Ok(Some(Hover {
+                                contents: HoverContents::Markup(MarkupContent {
+                                    kind: MarkupKind::Markdown,
+                                    value: format!("```striv\n{}.{}: {}\n```", s.name, field, f_ty),
+                                }),
+                                range: None,
+                            }));
+                        }
+                    }
+                }
+            }
+        }
+
+        let visible = collect_visible_vars(&lines, pos.line as usize);
+        if let Some((v_name, v_ty)) = visible.iter().find(|(n, _)| n == &token) {
+            return Ok(Some(Hover {
+                contents: HoverContents::Markup(MarkupContent {
+                    kind: MarkupKind::Markdown,
+                    value: format!("```striv\nlet {}: {}\n```", v_name, v_ty),
+                }),
+                range: None,
+            }));
         }
 
         Ok(None)
@@ -914,7 +1084,72 @@ impl LanguageServer for StrivLsp {
         Ok(None)
     }
 
-    // 6. INLAY HINTS (`: Type` after `let` and `for` variables, like rust-analyzer)
+    // 6. DOCUMENT SYMBOLS (Outline / Breadcrumbs / Ctrl+Shift+O)
+    #[allow(deprecated)]
+    async fn document_symbol(
+        &self,
+        params: DocumentSymbolParams,
+    ) -> Result<Option<DocumentSymbolResponse>> {
+        let docs = self.documents.read().await;
+        let uri = &params.text_document.uri;
+        let Some(src) = docs.get(uri) else {
+            return Ok(None);
+        };
+        let mut syms = Vec::new();
+        for (idx, line) in src.lines().enumerate() {
+            let t = line.trim_start();
+            let line_u32 = idx as u32;
+            let range = Range::new(
+                Position::new(line_u32, 0),
+                Position::new(line_u32, line.len() as u32),
+            );
+            let (kind, name) = if let Some(r) = t.strip_prefix("fn ") {
+                (
+                    SymbolKind::FUNCTION,
+                    r.split('(').next().unwrap_or("").trim(),
+                )
+            } else if let Some(r) = t.strip_prefix("struct ") {
+                (
+                    SymbolKind::STRUCT,
+                    r.split(|c: char| !c.is_alphanumeric() && c != '_')
+                        .next()
+                        .unwrap_or(""),
+                )
+            } else if let Some(r) = t.strip_prefix("enum ") {
+                (
+                    SymbolKind::ENUM,
+                    r.split(|c: char| !c.is_alphanumeric() && c != '_')
+                        .next()
+                        .unwrap_or(""),
+                )
+            } else if let Some(r) = t.strip_prefix("const ") {
+                (
+                    SymbolKind::CONSTANT,
+                    r.split('=').next().unwrap_or("").trim(),
+                )
+            } else if let Some(r) = t.strip_prefix("tweak ") {
+                (
+                    SymbolKind::CONSTANT,
+                    r.split('=').next().unwrap_or("").trim(),
+                )
+            } else {
+                continue;
+            };
+            if !name.is_empty() {
+                syms.push(SymbolInformation {
+                    name: name.to_string(),
+                    kind,
+                    tags: None,
+                    deprecated: None,
+                    location: Location::new(uri.clone(), range),
+                    container_name: None,
+                });
+            }
+        }
+        Ok(Some(DocumentSymbolResponse::Flat(syms)))
+    }
+
+    // 7. INLAY HINTS (`: Type` after `let` and `for` variables, like rust-analyzer)
     async fn inlay_hint(&self, params: InlayHintParams) -> Result<Option<Vec<InlayHint>>> {
         let docs = self.documents.read().await;
         let uri = &params.text_document.uri;
@@ -996,6 +1231,12 @@ fn infer_expr_type(rhs: &str, prog: Option<&striv_syntax::Program>) -> String {
     }
     if expr.starts_with('[') {
         return "Vec".to_string();
+    }
+    if expr == "true" || expr == "false" {
+        return "bool".to_string();
+    }
+    if expr.starts_with('(') && expr.contains(',') {
+        return "Tuple".to_string();
     }
     if expr.starts_with("Ok(") || expr.starts_with("Err(") {
         return "Result".to_string();
@@ -1114,7 +1355,30 @@ fn infer_var_struct(src: &str, var_name: &str, prog: &striv_syntax::Program) -> 
         }
     }
 
-    // 2. Search for `let [mut] var = Struct` or parameter `var: Struct`
+    // 2. Search for `for [mut] var in list` -> `list: Vec<Struct>`
+    let for_a = format!("for {} in ", var_name);
+    let for_b = format!("for mut {} in ", var_name);
+    for line in src.lines() {
+        let t = line.trim();
+        let rest = t.strip_prefix(&for_a).or_else(|| t.strip_prefix(&for_b));
+        if let Some(after_in) = rest {
+            let coll = after_in
+                .split(|c: char| !c.is_alphanumeric() && c != '_')
+                .next()
+                .unwrap_or("");
+            if !coll.is_empty() {
+                for l2 in src.lines() {
+                    if let Some((_, rhs)) = l2.split_once(&format!("{}: Vec<", coll)) {
+                        if let Some(s_name) = rhs.split('>').next() {
+                            return Some(s_name.trim().to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 3. Search for `let [mut] var = Struct` or parameter `var: Struct`
     for line in src.lines() {
         for s in &prog.structs {
             if line.contains(&format!("{}: {}", var_name, s.name))
@@ -1175,21 +1439,33 @@ fn collect_visible_vars(lines: &[&str], cursor_line: usize) -> Vec<(String, Stri
             let rest = rest.trim_start_matches("mut ").trim();
             if let Some((name_part, val_part)) = rest.split_once('=') {
                 let name = name_part.split(':').next().unwrap_or("").trim();
-                let val = val_part.trim();
-                let ty = val.split('{').next().unwrap_or("int").trim();
-                let ty_display = if val.starts_with('"') {
-                    "String".to_string()
-                } else if val.starts_with('[') {
-                    "Vec".to_string()
-                } else if let Some((handle_ty, _)) = val.split_once("::") {
-                    handle_ty.trim().to_string()
-                } else if ty.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) {
-                    ty.to_string()
+                if name.starts_with('(') && name.ends_with(')') {
+                    let inner = &name[1..name.len() - 1];
+                    for part in inner.split(',') {
+                        let v = part.trim().trim_start_matches("mut ").trim();
+                        if !v.is_empty() {
+                            vars.push((v.to_string(), "int".to_string()));
+                        }
+                    }
                 } else {
-                    "int".to_string()
-                };
-                if !name.is_empty() {
-                    vars.push((name.to_string(), ty_display));
+                    let val = val_part.trim();
+                    let ty = val.split('{').next().unwrap_or("int").trim();
+                    let ty_display = if val.starts_with('"') {
+                        "String".to_string()
+                    } else if val.starts_with('[') {
+                        "Vec".to_string()
+                    } else if val.starts_with('(') && val.contains(',') {
+                        "Tuple".to_string()
+                    } else if let Some((handle_ty, _)) = val.split_once("::") {
+                        handle_ty.trim().to_string()
+                    } else if ty.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) {
+                        ty.to_string()
+                    } else {
+                        "int".to_string()
+                    };
+                    if !name.is_empty() {
+                        vars.push((name.to_string(), ty_display));
+                    }
                 }
             }
         }
@@ -1252,12 +1528,28 @@ fn find_def_in_source(uri: &Url, src: &str, name: &str) -> Option<Location> {
     let fn_pat_sp = format!("fn {} (", name);
     let st_pat = format!("struct {} ", name);
     let st_pat_br = format!("struct {}{{", name);
+    let en_pat = format!("enum {} ", name);
+    let en_pat_br = format!("enum {}{{", name);
+    let const_pat = format!("const {} ", name);
+    let const_pat_eq = format!("const {}=", name);
+    let tweak_pat = format!("tweak {} ", name);
+    let tweak_pat_eq = format!("tweak {}=", name);
+    let let_pat = format!("let {} ", name);
+    let let_mut_pat = format!("let mut {} ", name);
     for (idx, line) in src.lines().enumerate() {
         let t = line.trim_start();
         if t.starts_with(&fn_pat)
             || t.starts_with(&fn_pat_sp)
             || t.starts_with(&st_pat)
             || t.starts_with(&st_pat_br)
+            || t.starts_with(&en_pat)
+            || t.starts_with(&en_pat_br)
+            || t.starts_with(&const_pat)
+            || t.starts_with(&const_pat_eq)
+            || t.starts_with(&tweak_pat)
+            || t.starts_with(&tweak_pat_eq)
+            || t.starts_with(&let_pat)
+            || t.starts_with(&let_mut_pat)
         {
             let col = line.find(name).unwrap_or(0) as u32;
             return Some(Location::new(

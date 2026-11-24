@@ -1,4 +1,6 @@
+pub mod collections;
 pub mod generated_bridge;
+pub use collections::*;
 
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -253,6 +255,14 @@ pub extern "C" fn striv_str_push_int(s_ptr: *mut String, val: i64) -> *mut Strin
     s_ptr
 }
 
+/// Appends a float to an existing heap `String` (for `"pos.x = {pos.x}"`).
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_str_push_float(s_ptr: *mut String, val: f64) -> *mut String {
+    let s = unsafe { &mut *s_ptr };
+    s.push_str(&format!("{}", val));
+    s_ptr
+}
+
 /// Appends another heap `String` (for `"Hello {name}"`).
 #[unsafe(no_mangle)]
 pub extern "C" fn striv_str_push_str(s_ptr: *mut String, other_ptr: *const String) -> *mut String {
@@ -364,69 +374,6 @@ pub fn present_host_window(handle_bits: i64) -> bool {
     })
 }
 
-#[unsafe(no_mangle)]
-pub extern "C" fn striv_clear(handle_bits: i64, color: i64) -> i64 {
-    let handle = WinHandle::from(KeyData::from_ffi(handle_bits as u64));
-    WINDOWS.with(|w| {
-        if let Some(hw) = w.borrow_mut().get_mut(handle) {
-            hw.buffer.fill(color as u32);
-        }
-    });
-    0
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn striv_rect(
-    handle_bits: i64,
-    x: i64,
-    y: i64,
-    w_rect: i64,
-    h_rect: i64,
-    color: i64,
-) -> i64 {
-    let handle = WinHandle::from(KeyData::from_ffi(handle_bits as u64));
-    WINDOWS.with(|w| {
-        let mut map = w.borrow_mut();
-        let Some(hw) = map.get_mut(handle) else {
-            return;
-        };
-        let x0 = x.max(0) as usize;
-        let y0 = y.max(0) as usize;
-        let x1 = (x + w_rect).max(0).min(hw.width as i64) as usize;
-        let y1 = (y + h_rect).max(0).min(hw.height as i64) as usize;
-
-        for py in y0..y1 {
-            let row = py * hw.width;
-            for px in x0..x1 {
-                hw.buffer[row + px] = color as u32;
-            }
-        }
-    });
-    0
-}
-
-/// Keyboard query: 1 = Left, 2 = Right, 3 = Up, 4 = Down, 5 = Space
-#[unsafe(no_mangle)]
-pub extern "C" fn striv_key_down(handle_bits: i64, key_code: i64) -> i64 {
-    let handle = WinHandle::from(KeyData::from_ffi(handle_bits as u64));
-    let key = match key_code {
-        1 => Key::Left,
-        2 => Key::Right,
-        3 => Key::Up,
-        4 => Key::Down,
-        5 => Key::Space,
-        6 => Key::A,
-        7 => Key::D,
-        _ => return 0,
-    };
-    WINDOWS.with(|w| {
-        w.borrow()
-            .get(handle)
-            .map(|hw| if hw.win.is_key_down(key) { 1 } else { 0 })
-            .unwrap_or(0)
-    })
-}
-
 use std::cell::Cell;
 
 thread_local! {
@@ -446,4 +393,13 @@ pub extern "C" fn striv_take_err() -> i64 {
         e.set(0);
         val
     })
+}
+
+thread_local! {
+    static TUPLE_BUF: std::cell::UnsafeCell<[u64; 8]> = const { std::cell::UnsafeCell::new([0; 8]) };
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_tuple_buf_ptr() -> *mut u64 {
+    TUPLE_BUF.with(|b| b.get() as *mut u64)
 }

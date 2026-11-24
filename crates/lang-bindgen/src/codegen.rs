@@ -16,7 +16,7 @@ pub fn emit_crate_bridge(apis: &[CrateApi]) -> (String, SyncSummary) {
          use std::cell::RefCell;\n\n",
     );
 
-    let mut symbols: Vec<(String, String, usize)> = Vec::new();
+    let mut symbols: Vec<(String, String, String)> = Vec::new();
     let mut constants: Vec<(String, i64)> = Vec::new();
     let mut docs: Vec<(String, String, String)> = Vec::new();
     let mut locations: Vec<(String, String, u32)> = Vec::new();
@@ -101,15 +101,24 @@ pub fn emit_crate_bridge(apis: &[CrateApi]) -> (String, SyncSummary) {
             };
 
             let mut c_params = Vec::new();
+            let mut abi_params = String::new();
             if m.receiver.is_some() {
                 c_params.push("self_h: i64".to_string());
+                abi_params.push('i');
             }
-            for (i, _) in m.args.iter().enumerate() {
-                c_params.push(format!("arg{}: i64", i));
+            for (i, arg) in m.args.iter().enumerate() {
+                if matches!(arg, ArgKind::Float(_)) {
+                    c_params.push(format!("arg{}: f64", i));
+                    abi_params.push('f');
+                } else {
+                    c_params.push(format!("arg{}: i64", i));
+                    abi_params.push('i');
+                }
             }
 
-            let param_count = c_params.len();
-            symbols.push((striv_name.clone(), c_sym.clone(), param_count));
+            let is_float_ret = matches!(m.ret, RetKind::Float);
+            let abi_sig = format!("{}->{}", abi_params, if is_float_ret { "f" } else { "i" });
+            symbols.push((striv_name.clone(), c_sym.clone(), abi_sig));
 
             let params_disp: Vec<String> = m
                 .arg_metas
@@ -137,8 +146,9 @@ pub fn emit_crate_bridge(apis: &[CrateApi]) -> (String, SyncSummary) {
             }
             docs.push((striv_name, sig_str, m.doc.clone()));
 
+            let c_ret = if is_float_ret { "f64" } else { "i64" };
             out.push_str(&format!(
-                "#[unsafe(no_mangle)]\npub extern \"C\" fn {}({}) -> i64 {{\n",
+                "#[unsafe(no_mangle)]\npub extern \"C\" fn {}({}) -> {c_ret} {{\n",
                 c_sym,
                 c_params.join(", ")
             ));
@@ -210,9 +220,7 @@ pub fn emit_crate_bridge(apis: &[CrateApi]) -> (String, SyncSummary) {
                 RetKind::Bool => {
                     out.push_str(&format!("    if {} {{ 1 }} else {{ 0 }}\n", call_expr))
                 }
-                RetKind::Float => {
-                    out.push_str(&format!("    (({}) as f64).to_bits() as i64\n", call_expr))
-                }
+                RetKind::Float => out.push_str(&format!("    ({}) as f64\n", call_expr)),
                 RetKind::Handle(s) => {
                     let vault = format!("VAULT_{}_{}", cr.to_uppercase(), s.to_uppercase());
                     out.push_str(&format!(
@@ -236,11 +244,11 @@ pub fn emit_crate_bridge(apis: &[CrateApi]) -> (String, SyncSummary) {
         }
     }
 
-    out.push_str("pub fn exported_symbols() -> &'static [(&'static str, &'static str, *const u8, usize)] {\n    &[\n");
-    for (striv_name, c_sym, param_count) in &symbols {
+    out.push_str("pub fn exported_symbols() -> &'static [(&'static str, &'static str, *const u8, &'static str)] {\n    &[\n");
+    for (striv_name, c_sym, abi_sig) in &symbols {
         out.push_str(&format!(
-            "        (\"{}\", \"{}\", {} as *const u8, {}),\n",
-            striv_name, c_sym, c_sym, param_count
+            "        (\"{}\", \"{}\", {} as *const u8, \"{}\"),\n",
+            striv_name, c_sym, c_sym, abi_sig
         ));
     }
     out.push_str("    ]\n}\n\n");

@@ -457,7 +457,7 @@ pub extern "C" fn striv_auto_minifb_window_is_key_released(self_h: i64, arg0: i6
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn striv_auto_minifb_window_set_key_repeat_delay(self_h: i64, arg0: i64) -> i64 {
+pub extern "C" fn striv_auto_minifb_window_set_key_repeat_delay(self_h: i64, arg0: f64) -> i64 {
     VAULT_MINIFB_WINDOW.with(|v| {
         let mut map = v.borrow_mut();
         let obj = map
@@ -471,7 +471,7 @@ pub extern "C" fn striv_auto_minifb_window_set_key_repeat_delay(self_h: i64, arg
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn striv_auto_minifb_window_set_key_repeat_rate(self_h: i64, arg0: i64) -> i64 {
+pub extern "C" fn striv_auto_minifb_window_set_key_repeat_rate(self_h: i64, arg0: f64) -> i64 {
     VAULT_MINIFB_WINDOW.with(|v| {
         let mut map = v.borrow_mut();
         let obj = map
@@ -600,51 +600,47 @@ pub extern "C" fn striv_auto_fastrand_rng_bool(self_h: i64) -> i64 {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn striv_auto_fastrand_rng_f32_inclusive(self_h: i64) -> i64 {
-    ((VAULT_FASTRAND_RNG.with(|v| {
+pub extern "C" fn striv_auto_fastrand_rng_f32_inclusive(self_h: i64) -> f64 {
+    (VAULT_FASTRAND_RNG.with(|v| {
         let mut map = v.borrow_mut();
         let obj = map
             .get_mut(AutoKey_fastrand_Rng::from(KeyData::from_ffi(self_h as u64)))
             .expect("Invalid handle");
         obj.f32_inclusive()
-    })) as f64)
-        .to_bits() as i64
+    })) as f64
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn striv_auto_fastrand_rng_f32(self_h: i64) -> i64 {
-    ((VAULT_FASTRAND_RNG.with(|v| {
+pub extern "C" fn striv_auto_fastrand_rng_f32(self_h: i64) -> f64 {
+    (VAULT_FASTRAND_RNG.with(|v| {
         let mut map = v.borrow_mut();
         let obj = map
             .get_mut(AutoKey_fastrand_Rng::from(KeyData::from_ffi(self_h as u64)))
             .expect("Invalid handle");
         obj.f32()
-    })) as f64)
-        .to_bits() as i64
+    })) as f64
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn striv_auto_fastrand_rng_f64_inclusive(self_h: i64) -> i64 {
-    ((VAULT_FASTRAND_RNG.with(|v| {
+pub extern "C" fn striv_auto_fastrand_rng_f64_inclusive(self_h: i64) -> f64 {
+    (VAULT_FASTRAND_RNG.with(|v| {
         let mut map = v.borrow_mut();
         let obj = map
             .get_mut(AutoKey_fastrand_Rng::from(KeyData::from_ffi(self_h as u64)))
             .expect("Invalid handle");
         obj.f64_inclusive()
-    })) as f64)
-        .to_bits() as i64
+    })) as f64
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn striv_auto_fastrand_rng_f64(self_h: i64) -> i64 {
-    ((VAULT_FASTRAND_RNG.with(|v| {
+pub extern "C" fn striv_auto_fastrand_rng_f64(self_h: i64) -> f64 {
+    (VAULT_FASTRAND_RNG.with(|v| {
         let mut map = v.borrow_mut();
         let obj = map
             .get_mut(AutoKey_fastrand_Rng::from(KeyData::from_ffi(self_h as u64)))
             .expect("Invalid handle");
         obj.f64()
-    })) as f64)
-        .to_bits() as i64
+    })) as f64
 }
 
 #[unsafe(no_mangle)]
@@ -687,260 +683,260 @@ pub extern "C" fn striv_auto_fastrand_bool() -> i64 {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn striv_auto_fastrand_f32() -> i64 {
-    ((fastrand::f32()) as f64).to_bits() as i64
+pub extern "C" fn striv_auto_fastrand_f32() -> f64 {
+    (fastrand::f32()) as f64
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn striv_auto_fastrand_f32_inclusive() -> i64 {
-    ((fastrand::f32_inclusive()) as f64).to_bits() as i64
+pub extern "C" fn striv_auto_fastrand_f32_inclusive() -> f64 {
+    (fastrand::f32_inclusive()) as f64
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn striv_auto_fastrand_f64() -> i64 {
-    ((fastrand::f64()) as f64).to_bits() as i64
+pub extern "C" fn striv_auto_fastrand_f64() -> f64 {
+    (fastrand::f64()) as f64
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn striv_auto_fastrand_f64_inclusive() -> i64 {
-    ((fastrand::f64_inclusive()) as f64).to_bits() as i64
+pub extern "C" fn striv_auto_fastrand_f64_inclusive() -> f64 {
+    (fastrand::f64_inclusive()) as f64
 }
 
-pub fn exported_symbols() -> &'static [(&'static str, &'static str, *const u8, usize)] {
+pub fn exported_symbols() -> &'static [(&'static str, &'static str, *const u8, &'static str)] {
     &[
         (
             "Window__new",
             "striv_auto_minifb_window_new",
             striv_auto_minifb_window_new as *const u8,
-            4,
+            "iiii->i",
         ),
         (
             "Window__set_title",
             "striv_auto_minifb_window_set_title",
             striv_auto_minifb_window_set_title as *const u8,
-            2,
+            "ii->i",
         ),
         (
             "Window__update_with_buffer",
             "striv_auto_minifb_window_update_with_buffer",
             striv_auto_minifb_window_update_with_buffer as *const u8,
-            4,
+            "iiii->i",
         ),
         (
             "Window__update",
             "striv_auto_minifb_window_update",
             striv_auto_minifb_window_update as *const u8,
-            1,
+            "i->i",
         ),
         (
             "Window__is_open",
             "striv_auto_minifb_window_is_open",
             striv_auto_minifb_window_is_open as *const u8,
-            1,
+            "i->i",
         ),
         (
             "Window__set_position",
             "striv_auto_minifb_window_set_position",
             striv_auto_minifb_window_set_position as *const u8,
-            3,
+            "iii->i",
         ),
         (
             "Window__topmost",
             "striv_auto_minifb_window_topmost",
             striv_auto_minifb_window_topmost as *const u8,
-            2,
+            "ii->i",
         ),
         (
             "Window__set_background_color",
             "striv_auto_minifb_window_set_background_color",
             striv_auto_minifb_window_set_background_color as *const u8,
-            4,
+            "iiii->i",
         ),
         (
             "Window__set_cursor_visibility",
             "striv_auto_minifb_window_set_cursor_visibility",
             striv_auto_minifb_window_set_cursor_visibility as *const u8,
-            2,
+            "ii->i",
         ),
         (
             "Window__set_target_fps",
             "striv_auto_minifb_window_set_target_fps",
             striv_auto_minifb_window_set_target_fps as *const u8,
-            2,
+            "ii->i",
         ),
         (
             "Window__get_mouse_down",
             "striv_auto_minifb_window_get_mouse_down",
             striv_auto_minifb_window_get_mouse_down as *const u8,
-            2,
+            "ii->i",
         ),
         (
             "Window__set_cursor_style",
             "striv_auto_minifb_window_set_cursor_style",
             striv_auto_minifb_window_set_cursor_style as *const u8,
-            2,
+            "ii->i",
         ),
         (
             "Window__is_key_down",
             "striv_auto_minifb_window_is_key_down",
             striv_auto_minifb_window_is_key_down as *const u8,
-            2,
+            "ii->i",
         ),
         (
             "Window__is_key_pressed",
             "striv_auto_minifb_window_is_key_pressed",
             striv_auto_minifb_window_is_key_pressed as *const u8,
-            3,
+            "iii->i",
         ),
         (
             "Window__is_key_released",
             "striv_auto_minifb_window_is_key_released",
             striv_auto_minifb_window_is_key_released as *const u8,
-            2,
+            "ii->i",
         ),
         (
             "Window__set_key_repeat_delay",
             "striv_auto_minifb_window_set_key_repeat_delay",
             striv_auto_minifb_window_set_key_repeat_delay as *const u8,
-            2,
+            "if->i",
         ),
         (
             "Window__set_key_repeat_rate",
             "striv_auto_minifb_window_set_key_repeat_rate",
             striv_auto_minifb_window_set_key_repeat_rate as *const u8,
-            2,
+            "if->i",
         ),
         (
             "Window__is_active",
             "striv_auto_minifb_window_is_active",
             striv_auto_minifb_window_is_active as *const u8,
-            1,
+            "i->i",
         ),
         (
             "Window__remove_menu",
             "striv_auto_minifb_window_remove_menu",
             striv_auto_minifb_window_remove_menu as *const u8,
-            2,
+            "ii->i",
         ),
         (
             "Menu__new",
             "striv_auto_minifb_menu_new",
             striv_auto_minifb_menu_new as *const u8,
-            1,
+            "i->i",
         ),
         (
             "Menu__destroy_menu",
             "striv_auto_minifb_menu_destroy_menu",
             striv_auto_minifb_menu_destroy_menu as *const u8,
-            1,
+            "i->i",
         ),
         (
             "Menu__add_separator",
             "striv_auto_minifb_menu_add_separator",
             striv_auto_minifb_menu_add_separator as *const u8,
-            1,
+            "i->i",
         ),
         (
             "WindowOptions__default",
             "striv_auto_minifb_windowoptions_default",
             striv_auto_minifb_windowoptions_default as *const u8,
-            0,
+            "->i",
         ),
         (
             "Rng__with_seed",
             "striv_auto_fastrand_rng_with_seed",
             striv_auto_fastrand_rng_with_seed as *const u8,
-            1,
+            "i->i",
         ),
         (
             "Rng__fork",
             "striv_auto_fastrand_rng_fork",
             striv_auto_fastrand_rng_fork as *const u8,
-            1,
+            "i->i",
         ),
         (
             "Rng__bool",
             "striv_auto_fastrand_rng_bool",
             striv_auto_fastrand_rng_bool as *const u8,
-            1,
+            "i->i",
         ),
         (
             "Rng__f32_inclusive",
             "striv_auto_fastrand_rng_f32_inclusive",
             striv_auto_fastrand_rng_f32_inclusive as *const u8,
-            1,
+            "i->f",
         ),
         (
             "Rng__f32",
             "striv_auto_fastrand_rng_f32",
             striv_auto_fastrand_rng_f32 as *const u8,
-            1,
+            "i->f",
         ),
         (
             "Rng__f64_inclusive",
             "striv_auto_fastrand_rng_f64_inclusive",
             striv_auto_fastrand_rng_f64_inclusive as *const u8,
-            1,
+            "i->f",
         ),
         (
             "Rng__f64",
             "striv_auto_fastrand_rng_f64",
             striv_auto_fastrand_rng_f64 as *const u8,
-            1,
+            "i->f",
         ),
         (
             "Rng__seed",
             "striv_auto_fastrand_rng_seed",
             striv_auto_fastrand_rng_seed as *const u8,
-            2,
+            "ii->i",
         ),
         (
             "Rng__get_seed",
             "striv_auto_fastrand_rng_get_seed",
             striv_auto_fastrand_rng_get_seed as *const u8,
-            1,
+            "i->i",
         ),
         (
             "seed",
             "striv_auto_fastrand_seed",
             striv_auto_fastrand_seed as *const u8,
-            1,
+            "i->i",
         ),
         (
             "get_seed",
             "striv_auto_fastrand_get_seed",
             striv_auto_fastrand_get_seed as *const u8,
-            0,
+            "->i",
         ),
         (
             "bool",
             "striv_auto_fastrand_bool",
             striv_auto_fastrand_bool as *const u8,
-            0,
+            "->i",
         ),
         (
             "f32",
             "striv_auto_fastrand_f32",
             striv_auto_fastrand_f32 as *const u8,
-            0,
+            "->f",
         ),
         (
             "f32_inclusive",
             "striv_auto_fastrand_f32_inclusive",
             striv_auto_fastrand_f32_inclusive as *const u8,
-            0,
+            "->f",
         ),
         (
             "f64",
             "striv_auto_fastrand_f64",
             striv_auto_fastrand_f64 as *const u8,
-            0,
+            "->f",
         ),
         (
             "f64_inclusive",
             "striv_auto_fastrand_f64_inclusive",
             striv_auto_fastrand_f64_inclusive as *const u8,
-            0,
+            "->f",
         ),
     ]
 }

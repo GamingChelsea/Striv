@@ -1,0 +1,27 @@
+[build]
+jobs = 22
+
+[unstable]
+codegen-backend = true
+
+[target.x86_64-pc-windows-msvc]
+# Mold-Linker auf R:\ für minimale I/O-Latenz und maximale Performance
+linker = "R:\\mold-win\\mold.exe"
+
+[profile.dev]
+codegen-backend = "cranelift"
+incremental = false
+debug = 1
+
+[profile.dev.package.fearless_simd]
+codegen-backend = "llvm"
+
+[profile.dev.package.vello_common]
+codegen-backend = "llvm"
+
+[profile.dev.package.vello_cpu]
+codegen-backend = "llvm"
+
+[profile.dev.package."*"]
+opt-level = 1
+debug = 0
