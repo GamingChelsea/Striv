@@ -93,6 +93,7 @@ struct CompileEnv<'a> {
     vec_len_ref: cranelift::codegen::ir::FuncRef,
     vec_free_ref: cranelift::codegen::ir::FuncRef,
     literals: &'a mut Vec<Box<[u8]>>,
+    user_enums: &'a HashMap<String, i64>,
     structs: &'a HashMap<String, Box<StructDef>>,
     funcs: HashMap<String, (cranelift::codegen::ir::FuncRef, Vec<(String, bool)>)>,
 }
@@ -305,6 +306,13 @@ impl JitCompiler {
             .declare_function("striv_take_err", Linkage::Import, &sig_take_err)
             .unwrap();
 
+        let mut user_enums = HashMap::new();
+        for e in &prog.enums {
+            for (idx, v) in e.variants.iter().enumerate() {
+                user_enums.insert(format!("{}__{}", e.name, v), idx as i64);
+            }
+        }
+
         // 1. Pre-register all functions so they can call each other
         let mut func_ids = Vec::new();
         for func in &prog.functions {
@@ -406,6 +414,7 @@ impl JitCompiler {
                     vec_len_ref: self.module.declare_func_in_func(vec_len_id, builder.func),
                     vec_free_ref: self.module.declare_func_in_func(vec_free_id, builder.func),
                     literals: &mut self.kept_literals,
+                    user_enums: &user_enums,
                     structs: &self.kept_structs,
                     funcs: funcs_map,
                 };
@@ -977,6 +986,60 @@ fn compile_stmt(
             builder.seal_block(exit_bb);
             false
         }
+        Stmt::Match { target, arms } => {
+            let target_val = compile_expr(target, builder, vars, env);
+            let exit_bb = builder.create_block();
+
+            for (pat, body) in arms {
+                match pat {
+                    striv_syntax::MatchPat::Wildcard => {
+                        let mut ret = false;
+                        for s in body {
+                            if compile_stmt(s, builder, vars, env, owned_strings, owned_vecs) {
+                                ret = true;
+                                break;
+                            }
+                        }
+                        if !ret {
+                            builder.ins().jump(exit_bb, &[]);
+                        }
+                        let after_wild = builder.create_block();
+                        builder.switch_to_block(after_wild);
+                        builder.seal_block(after_wild);
+                        break;
+                    }
+                    striv_syntax::MatchPat::Expr(pat_expr) => {
+                        let pat_val = compile_expr(pat_expr, builder, vars, env);
+                        let cond = builder.ins().icmp(IntCC::Equal, target_val, pat_val);
+
+                        let arm_bb = builder.create_block();
+                        let next_bb = builder.create_block();
+                        builder.ins().brif(cond, arm_bb, &[], next_bb, &[]);
+
+                        builder.switch_to_block(arm_bb);
+                        builder.seal_block(arm_bb);
+                        let mut ret = false;
+                        for s in body {
+                            if compile_stmt(s, builder, vars, env, owned_strings, owned_vecs) {
+                                ret = true;
+                                break;
+                            }
+                        }
+                        if !ret {
+                            builder.ins().jump(exit_bb, &[]);
+                        }
+
+                        builder.switch_to_block(next_bb);
+                        builder.seal_block(next_bb);
+                    }
+                }
+            }
+
+            builder.ins().jump(exit_bb, &[]);
+            builder.switch_to_block(exit_bb);
+            builder.seal_block(exit_bb);
+            false
+        }
         Stmt::IndexAssign { var, index, value } => {
             let Some(VarInfo::Vec { var: v_var, is_mut }) = vars.get(var) else {
                 panic!("'{}' is not a Vec!", var);
@@ -1076,6 +1139,60 @@ fn compile_stmt(
             builder.seal_block(exit_bb);
             false
         }
+        Stmt::Match { target, arms } => {
+            let target_val = compile_expr(target, builder, vars, env);
+            let exit_bb = builder.create_block();
+
+            for (pat, body) in arms {
+                match pat {
+                    striv_syntax::MatchPat::Wildcard => {
+                        let mut ret = false;
+                        for s in body {
+                            if compile_stmt(s, builder, vars, env, owned_strings, owned_vecs) {
+                                ret = true;
+                                break;
+                            }
+                        }
+                        if !ret {
+                            builder.ins().jump(exit_bb, &[]);
+                        }
+                        let after_wild = builder.create_block();
+                        builder.switch_to_block(after_wild);
+                        builder.seal_block(after_wild);
+                        break;
+                    }
+                    striv_syntax::MatchPat::Expr(pat_expr) => {
+                        let pat_val = compile_expr(pat_expr, builder, vars, env);
+                        let cond = builder.ins().icmp(IntCC::Equal, target_val, pat_val);
+
+                        let arm_bb = builder.create_block();
+                        let next_bb = builder.create_block();
+                        builder.ins().brif(cond, arm_bb, &[], next_bb, &[]);
+
+                        builder.switch_to_block(arm_bb);
+                        builder.seal_block(arm_bb);
+                        let mut ret = false;
+                        for s in body {
+                            if compile_stmt(s, builder, vars, env, owned_strings, owned_vecs) {
+                                ret = true;
+                                break;
+                            }
+                        }
+                        if !ret {
+                            builder.ins().jump(exit_bb, &[]);
+                        }
+
+                        builder.switch_to_block(next_bb);
+                        builder.seal_block(next_bb);
+                    }
+                }
+            }
+
+            builder.ins().jump(exit_bb, &[]);
+            builder.switch_to_block(exit_bb);
+            builder.seal_block(exit_bb);
+            false
+        }
         Stmt::Return(expr) => {
             let val = compile_expr(expr, builder, vars, env);
             for s_var in owned_strings.iter() {
@@ -1149,10 +1266,16 @@ fn compile_expr(
         Expr::Float(v) => builder.ins().f64const(*v),
         Expr::PathConst { ty, member } => {
             let key = format!("{}__{}", ty, member);
-            let val = lang_runtime::generated_bridge::exported_constants()
-                .iter()
-                .find(|(k, _)| *k == key)
-                .map(|(_, v)| *v)
+            let val = env
+                .user_enums
+                .get(&key)
+                .copied()
+                .or_else(|| {
+                    lang_runtime::generated_bridge::exported_constants()
+                        .iter()
+                        .find(|(k, _)| *k == key)
+                        .map(|(_, v)| *v)
+                })
                 .unwrap_or_else(|| panic!("Unknown constant `{}::{}`", ty, member));
             builder.ins().iconst(env.int_ty, val)
         }

@@ -113,6 +113,54 @@ fn main() {
                 std::thread::sleep(std::time::Duration::from_millis(800));
             }
         }
+        "build" => {
+            let path = args
+                .get(2)
+                .expect("Please provide a file: striv-cli build main.strv");
+            let entry = std::path::Path::new(path);
+            let app_name = entry
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("striv_app");
+
+            let start = Instant::now();
+            let prog =
+                striv_syntax::load_program_with_imports(entry).expect("Failed to load modules");
+            let rust_code = striv_syntax::release_gen::transpile_to_rust(&prog);
+
+            let _ = fs::create_dir_all(".striv-release/src");
+            let deps_section =
+                fs::read_to_string("striv.toml").unwrap_or_else(|_| "[dependencies]\n".into());
+            let cargo_toml = format!(
+                "[workspace]\n\n[package]\nname = \"{}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n{}\n",
+                app_name, deps_section
+            );
+
+            fs::write(".striv-release/Cargo.toml", cargo_toml).unwrap();
+            fs::write(".striv-release/src/main.rs", rust_code).unwrap();
+
+            println!("[Striv] Compiling optimized release EXE with LLVM...");
+            let status = std::process::Command::new("cargo")
+                .args([
+                    "build",
+                    "--release",
+                    "--manifest-path",
+                    ".striv-release/Cargo.toml",
+                ])
+                .status()
+                .expect("Failed to launch cargo");
+
+            if status.success() {
+                let built_exe = format!(".striv-release/target/release/{}.exe", app_name);
+                let out_exe = format!("{}.exe", app_name);
+                fs::copy(&built_exe, &out_exe).expect("Failed to copy built executable");
+                println!(
+                    "[Striv] Done in {:?}! Standalone executable created: {}",
+                    start.elapsed(),
+                    out_exe
+                );
+            }
+        }
         "sync" => {
             let toml_path = args.get(2).map(|s| s.as_str()).unwrap_or("striv.toml");
             let (code, summary) = lang_bindgen::sync_project(toml_path);

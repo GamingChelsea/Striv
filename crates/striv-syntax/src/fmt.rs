@@ -24,6 +24,14 @@ pub fn format_program(prog: &Program) -> String {
         out.push('\n');
     }
 
+    for e in &prog.enums {
+        out.push_str(&format!("enum {} {{\n", e.name));
+        for v in &e.variants {
+            out.push_str(&format!("    {},\n", v));
+        }
+        out.push_str("}\n\n");
+    }
+
     // 1. Print all structs
     for s in &prog.structs {
         out.push_str(&format!("struct {} {{\n", s.name));
@@ -223,6 +231,21 @@ fn format_stmt(stmt: &Stmt, level: usize, out: &mut String) {
                 op_str,
                 format_expr(value)
             ));
+        }
+        Stmt::Match { target, arms } => {
+            out.push_str(&format!("{}match {} {{\n", ind, format_expr(target)));
+            for (pat, body) in arms {
+                let pat_str = match pat {
+                    crate::MatchPat::Wildcard => "_".to_string(),
+                    crate::MatchPat::Expr(e) => format_expr(e),
+                };
+                out.push_str(&format!("{}    {} => {{\n", ind, pat_str));
+                for s in body {
+                    format_stmt(s, level + 2, out);
+                }
+                out.push_str(&format!("{}    }}\n", ind));
+            }
+            out.push_str(&format!("{}}}\n", ind));
         }
         Stmt::Return(e) => {
             out.push_str(&format!("{}return {}\n", ind, format_expr(e)));

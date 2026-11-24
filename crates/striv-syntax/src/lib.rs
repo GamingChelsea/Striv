@@ -1,6 +1,7 @@
 use logos::Logos;
 
 pub mod fmt;
+pub mod release_gen;
 pub use fmt::format_program;
 
 // AST
@@ -13,9 +14,22 @@ pub enum TweakVal {
 }
 
 #[derive(Debug, Clone)]
+pub struct EnumDef {
+    pub name: String,
+    pub variants: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub enum MatchPat {
+    Wildcard,
+    Expr(Expr),
+}
+
+#[derive(Debug, Clone)]
 pub struct Program {
     pub imports: Vec<String>,
     pub tweaks: Vec<(String, TweakVal)>,
+    pub enums: Vec<EnumDef>,
     pub structs: Vec<StructDef>,
     pub functions: Vec<Function>,
 }
@@ -72,6 +86,10 @@ pub enum Stmt {
     While {
         cond: Expr,
         body: Vec<Stmt>,
+    },
+    Match {
+        target: Expr,
+        arms: Vec<(MatchPat, Vec<Stmt>)>,
     },
     ForRange {
         var: String,
@@ -165,6 +183,12 @@ pub enum Op {
 pub enum Token {
     #[token("fn")]
     Fn,
+    #[token("enum")]
+    Enum,
+    #[token("match")]
+    Match,
+    #[token("_", priority = 3)]
+    Underscore,
     #[token("use")]
     Use,
     #[token("tweak")]
@@ -231,6 +255,8 @@ pub enum Token {
     Arrow,
     #[token("==")]
     EqEq,
+    #[token("=>")]
+    FatArrow,
     #[token("=")]
     Assign,
     #[token("+")]
@@ -267,6 +293,10 @@ impl Token {
     pub fn display_name(&self) -> String {
         match self {
             Token::Fn => "`fn`".to_string(),
+            Token::Enum => "`enum`".to_string(),
+            Token::Match => "`match`".to_string(),
+            Token::Underscore => "`_`".to_string(),
+            Token::FatArrow => "`=>`".to_string(),
             Token::Use => "`use`".to_string(),
             Token::Tweak => "`tweak`".to_string(),
             Token::Let => "`let`".to_string(),
@@ -385,6 +415,7 @@ impl Parser {
     pub fn parse_program(&mut self) -> Program {
         let mut imports = Vec::new();
         let mut tweaks = Vec::new();
+        let mut enums = Vec::new();
         let mut structs = Vec::new();
         let mut functions = Vec::new();
         while let Some(tok) = self.peek() {
@@ -435,6 +466,7 @@ impl Parser {
                     };
                     tweaks.push((t_name, val));
                 }
+                Token::Enum => enums.push(self.parse_enum()),
                 Token::Struct => structs.push(self.parse_struct()),
                 Token::Impl => {
                     self.next(); // consume `impl`
@@ -457,9 +489,30 @@ impl Parser {
         Program {
             imports,
             tweaks,
+            enums,
             structs,
             functions,
         }
+    }
+
+    fn parse_enum(&mut self) -> EnumDef {
+        self.expect(Token::Enum);
+        let Some(Token::Ident(name)) = self.next() else {
+            self.error("Expected enum name after `enum`");
+        };
+        self.expect(Token::LBrace);
+        let mut variants = Vec::new();
+        while self.peek() != Some(&Token::RBrace) {
+            let Some(Token::Ident(v_name)) = self.next() else {
+                self.error("Expected variant name in `enum`");
+            };
+            variants.push(v_name);
+            if self.peek() == Some(&Token::Comma) {
+                self.next();
+            }
+        }
+        self.expect(Token::RBrace);
+        EnumDef { name, variants }
     }
 
     fn parse_struct(&mut self) -> StructDef {
@@ -653,6 +706,28 @@ impl Parser {
                     end,
                     body,
                 }
+            }
+            Some(Token::Match) => {
+                self.next(); // consume `match`
+                let target = self.parse_expr();
+                self.expect(Token::LBrace);
+                let mut arms = Vec::new();
+                while self.peek() != Some(&Token::RBrace) {
+                    let pat = if self.peek() == Some(&Token::Underscore) {
+                        self.next();
+                        MatchPat::Wildcard
+                    } else {
+                        MatchPat::Expr(self.parse_expr())
+                    };
+                    self.expect(Token::FatArrow);
+                    let body = self.parse_block();
+                    if self.peek() == Some(&Token::Comma) {
+                        self.next();
+                    }
+                    arms.push((pat, body));
+                }
+                self.expect(Token::RBrace);
+                Stmt::Match { target, arms }
             }
             Some(Token::While) => {
                 self.next();
@@ -1113,6 +1188,11 @@ fn check_stmts_mut(
             Stmt::While { body, .. } => {
                 check_stmts_mut(src, body, mut_vars, errors);
             }
+            Stmt::Match { arms, .. } => {
+                for (_, body) in arms {
+                    check_stmts_mut(src, body, mut_vars, errors);
+                }
+            }
             Stmt::ForRange { var, body, .. } => {
                 mut_vars.insert(var.clone(), false);
                 check_stmts_mut(src, body, mut_vars, errors);
@@ -1127,6 +1207,7 @@ pub fn load_program_with_imports(entry_path: &std::path::Path) -> Result<Program
     let mut combined = Program {
         imports: Vec::new(),
         tweaks: Vec::new(),
+        enums: Vec::new(),
         structs: Vec::new(),
         functions: Vec::new(),
     };
@@ -1167,6 +1248,7 @@ fn load_recursive(
     }
 
     out.tweaks.extend(prog.tweaks);
+    out.enums.extend(prog.enums);
     out.structs.extend(prog.structs);
     out.functions.extend(prog.functions);
     Ok(())

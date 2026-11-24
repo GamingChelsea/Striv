@@ -362,6 +362,20 @@ impl LanguageServer for StrivLsp {
             // Also suggest methods for auto-bindgen handle types (e.g. `rng.` -> `bool()`, `f64()`)
             if let Some((_, ty_name)) = visible.iter().find(|(n, _)| n == &var_name) {
                 let prefix = format!("{}__", ty_name);
+                if let Some(prog) = &parsed {
+                    for e in &prog.enums {
+                        if e.name == *ty_name {
+                            for v in &e.variants {
+                                items.push(CompletionItem {
+                                    label: v.clone(),
+                                    kind: Some(CompletionItemKind::ENUM_MEMBER),
+                                    sort_text: Some(format!("0_{}", v)),
+                                    ..Default::default()
+                                });
+                            }
+                        }
+                    }
+                }
                 for (s_name, _, _, param_count) in
                     lang_runtime::generated_bridge::exported_symbols()
                 {
@@ -460,8 +474,8 @@ impl LanguageServer for StrivLsp {
 
         // --- CASE 3: General context (keywords with trailing space + functions) ---
         let keywords_with_space = [
-            "use", "tweak", "struct", "impl", "fn", "let", "mut", "if", "while", "for", "in",
-            "return",
+            "use", "tweak", "enum", "match", "struct", "impl", "fn", "let", "mut", "if", "while",
+            "for", "in", "return",
         ];
         for kw in keywords_with_space {
             items.push(CompletionItem {
@@ -522,6 +536,23 @@ impl LanguageServer for StrivLsp {
         }
 
         if let Some(prog) = &parsed {
+            for e in &prog.enums {
+                items.push(CompletionItem {
+                    label: e.name.clone(),
+                    kind: Some(CompletionItemKind::ENUM),
+                    sort_text: Some(format!("1_{}", e.name)),
+                    ..Default::default()
+                });
+                for v in &e.variants {
+                    let full = format!("{}::{}", e.name, v);
+                    items.push(CompletionItem {
+                        label: full.clone(),
+                        kind: Some(CompletionItemKind::ENUM_MEMBER),
+                        sort_text: Some(format!("0_{}", full)),
+                        ..Default::default()
+                    });
+                }
+            }
             for (t_name, t_val) in &prog.tweaks {
                 let detail = match t_val {
                     striv_syntax::TweakVal::Int(v) => format!("tweak = {}", v),
