@@ -14,6 +14,7 @@ pub enum TweakVal {
 
 #[derive(Debug, Clone)]
 pub struct Program {
+    pub imports: Vec<String>,
     pub tweaks: Vec<(String, TweakVal)>,
     pub structs: Vec<StructDef>,
     pub functions: Vec<Function>,
@@ -164,6 +165,8 @@ pub enum Op {
 pub enum Token {
     #[token("fn")]
     Fn,
+    #[token("use")]
+    Use,
     #[token("tweak")]
     Tweak,
     #[token("struct")]
@@ -264,6 +267,7 @@ impl Token {
     pub fn display_name(&self) -> String {
         match self {
             Token::Fn => "`fn`".to_string(),
+            Token::Use => "`use`".to_string(),
             Token::Tweak => "`tweak`".to_string(),
             Token::Let => "`let`".to_string(),
             Token::Mut => "`mut`".to_string(),
@@ -379,11 +383,31 @@ impl Parser {
     }
 
     pub fn parse_program(&mut self) -> Program {
+        let mut imports = Vec::new();
         let mut tweaks = Vec::new();
         let mut structs = Vec::new();
         let mut functions = Vec::new();
         while let Some(tok) = self.peek() {
             match tok {
+                Token::Use => {
+                    self.next(); // consume `use`
+                    let Some(Token::Ident(mod_name)) = self.next() else {
+                        self.error("Expected module name after `use` (e.g. `use player`)");
+                    };
+                    if self.peek() == Some(&Token::ColonColon) {
+                        self.next(); // `::`
+                        if self.peek() == Some(&Token::LBrace) {
+                            self.next(); // `{`
+                            while self.peek().is_some() && self.peek() != Some(&Token::RBrace) {
+                                self.next();
+                            }
+                            self.expect(Token::RBrace);
+                        } else {
+                            self.next(); // single symbol like `Player`
+                        }
+                    }
+                    imports.push(mod_name);
+                }
                 Token::Tweak => {
                     self.next(); // consume `tweak`
                     let Some(Token::Ident(t_name)) = self.next() else {
@@ -431,6 +455,7 @@ impl Parser {
             }
         }
         Program {
+            imports,
             tweaks,
             structs,
             functions,
@@ -1095,4 +1120,54 @@ fn check_stmts_mut(
             _ => {}
         }
     }
+}
+
+pub fn load_program_with_imports(entry_path: &std::path::Path) -> Result<Program, String> {
+    let mut visited = std::collections::HashSet::new();
+    let mut combined = Program {
+        imports: Vec::new(),
+        tweaks: Vec::new(),
+        structs: Vec::new(),
+        functions: Vec::new(),
+    };
+
+    load_recursive(entry_path, &mut visited, &mut combined)?;
+    Ok(combined)
+}
+
+fn load_recursive(
+    path: &std::path::Path,
+    visited: &mut std::collections::HashSet<std::path::PathBuf>,
+    out: &mut Program,
+) -> Result<(), String> {
+    let canonical = path
+        .canonicalize()
+        .map_err(|_| format!("Module file not found: '{}'", path.display()))?;
+    if !visited.insert(canonical.clone()) {
+        return Ok(());
+    }
+
+    let src = std::fs::read_to_string(&canonical)
+        .map_err(|e| format!("Could not read '{}': {}", path.display(), e))?;
+    let prog = Parser::new(&src).parse_program();
+
+    let dir = canonical
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."));
+    let ext = canonical
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("strv");
+
+    for imp in &prog.imports {
+        let dep_path = dir.join(format!("{}.{}", imp, ext));
+        if dep_path.exists() {
+            load_recursive(&dep_path, visited, out)?;
+        }
+    }
+
+    out.tweaks.extend(prog.tweaks);
+    out.structs.extend(prog.structs);
+    out.functions.extend(prog.functions);
+    Ok(())
 }

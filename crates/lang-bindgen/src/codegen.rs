@@ -19,6 +19,8 @@ pub fn emit_crate_bridge(apis: &[CrateApi]) -> (String, SyncSummary) {
     let mut symbols: Vec<(String, String, usize)> = Vec::new();
     let mut constants: Vec<(String, i64)> = Vec::new();
     let mut docs: Vec<(String, String, String)> = Vec::new();
+    let mut locations: Vec<(String, String, u32)> = Vec::new();
+    let mut symbol_crates: Vec<(String, String)> = Vec::new();
     let mut struct_count = 0;
     let mut enum_count = 0;
 
@@ -72,8 +74,16 @@ pub fn emit_crate_bridge(apis: &[CrateApi]) -> (String, SyncSummary) {
                     "        {} => {}::{}::{},\n",
                     idx, cr, en.name, var
                 ));
-                constants.push((format!("{}__{}", en.name, var), idx as i64));
+                let c_key = format!("{}__{}", en.name, var);
+                constants.push((c_key.clone(), idx as i64));
+                if !en.file.is_empty() {
+                    locations.push((c_key, en.file.clone(), en.line));
+                }
             }
+            if !en.file.is_empty() {
+                locations.push((en.name.clone(), en.file.clone(), en.line));
+            }
+            symbol_crates.push((en.name.clone(), cr.clone()));
             out.push_str(&format!(
                 "        _ => {}::{}::{},\n    }}\n}}\n\n",
                 cr, en.name, en.variants[0]
@@ -117,6 +127,14 @@ pub fn emit_crate_bridge(apis: &[CrateApi]) -> (String, SyncSummary) {
                 format!(" -> {}", m.ret_str)
             };
             let sig_str = format!("fn {}({}){}", disp_name, params_disp.join(", "), ret_disp);
+            if !m.file.is_empty() {
+                locations.push((striv_name.clone(), m.file.clone(), m.line));
+            }
+            if let Some(s) = &m.struct_name {
+                if !symbol_crates.iter().any(|(n, _)| n == s) {
+                    symbol_crates.push((s.clone(), cr.clone()));
+                }
+            }
             docs.push((striv_name, sig_str, m.doc.clone()));
 
             out.push_str(&format!(
@@ -236,6 +254,20 @@ pub fn emit_crate_bridge(apis: &[CrateApi]) -> (String, SyncSummary) {
     out.push_str("pub fn exported_docs() -> &'static [(&'static str, &'static str, &'static str)] {\n    &[\n");
     for (name, sig, doc) in &docs {
         out.push_str(&format!("        ({:?}, {:?}, {:?}),\n", name, sig, doc));
+    }
+    out.push_str("    ]\n}\n\n");
+
+    out.push_str(
+        "pub fn exported_locations() -> &'static [(&'static str, &'static str, u32)] {\n    &[\n",
+    );
+    for (name, file, line) in &locations {
+        out.push_str(&format!("        ({:?}, {:?}, {}),\n", name, file, line));
+    }
+    out.push_str("    ]\n}\n\n");
+
+    out.push_str("pub fn exported_crates() -> &'static [(&'static str, &'static str)] {\n    &[\n");
+    for (name, cr) in &symbol_crates {
+        out.push_str(&format!("        ({:?}, {:?}),\n", name, cr));
     }
     out.push_str("    ]\n}\n");
 

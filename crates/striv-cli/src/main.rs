@@ -14,7 +14,8 @@ fn main() {
             let source = fs::read_to_string(path).expect("Could not read file");
 
             let start = Instant::now();
-            let prog = Parser::new(&source).parse_program();
+            let prog = striv_syntax::load_program_with_imports(std::path::Path::new(path))
+                .expect("Failed to load program");
             let mut jit = JitCompiler::new();
             let ptr = jit.compile_program(&prog);
             let elapsed = start.elapsed();
@@ -30,7 +31,8 @@ fn main() {
             let source = fs::read_to_string(path).expect("Could not read file");
 
             let start = Instant::now();
-            let prog = Parser::new(&source).parse_program();
+            let prog = striv_syntax::load_program_with_imports(std::path::Path::new(path))
+                .expect("Failed to load program");
             let formatted = format_program(&prog);
             fs::write(path, formatted).expect("Could not save file");
             println!("Formatted '{}' in {:?}", path, start.elapsed());
@@ -54,7 +56,7 @@ fn main() {
                     return None;
                 }
                 let start = Instant::now();
-                let prog = Parser::new(&src).parse_program();
+                let prog = striv_syntax::load_program_with_imports(std::path::Path::new(p)).ok()?;
                 let mut jit = JitCompiler::new();
                 let ptr = jit.compile_program(&prog);
                 println!("[Striv] Hot-Reloaded in {:?}", start.elapsed());
@@ -99,7 +101,8 @@ fn main() {
             let source = fs::read_to_string(path).expect("Could not read file");
 
             lang_runtime::start_tweak_server();
-            let prog = Parser::new(&source).parse_program();
+            let prog = striv_syntax::load_program_with_imports(std::path::Path::new(path))
+                .expect("Failed to load program");
             let mut jit = JitCompiler::new();
             let ptr = jit.compile_program(&prog);
             let main_fn: fn() -> i64 = unsafe { mem::transmute(ptr) };

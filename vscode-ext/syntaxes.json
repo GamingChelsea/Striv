@@ -16,7 +16,7 @@
         }
       ]
     },
-    { "match": "\\b(fn|let|mut|if|else|while|for|in|return|struct|impl|print|tweak|const|concurrent)\\b", "name": "keyword.control" },
+    { "match": "\\b(use|fn|let|mut|if|else|while|for|in|return|struct|impl|print|tweak|const|concurrent|Ok|Err|Some|None)\\b", "name": "keyword.control" },
     { "match": "\\b(int|float|bool|String|Vec)\\b", "name": "storage.type" },
     { "match": "\\b[A-Z][a-zA-Z0-9_]*\\b", "name": "entity.name.type" },
     { "match": "\\b[a-z_][a-zA-Z0-9_]*(?=\\s*\\()", "name": "entity.name.function" },

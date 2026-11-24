@@ -64,6 +64,7 @@ impl LanguageServer for StrivLsp {
                     ..Default::default()
                 }),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
+                definition_provider: Some(OneOf::Left(true)),
                 inlay_hint_provider: Some(OneOf::Left(true)),
                 signature_help_provider: Some(SignatureHelpOptions {
                     trigger_characters: Some(vec!["(".to_string(), ",".to_string()]),
@@ -143,9 +144,95 @@ impl LanguageServer for StrivLsp {
             .collect::<Vec<_>>()
             .join("\n");
 
-        let parsed =
-            catch_unwind(AssertUnwindSafe(|| Parser::new(&clean_src).parse_program())).ok();
+        let uri = &params.text_document_position.text_document.uri;
         let mut items = Vec::new();
+
+        // --- CASE -1: `use ` module completion ---
+        if let Some(after_use) = before_cursor.trim_start().strip_prefix("use ") {
+            if !after_use.contains("::") {
+                if let Ok(file_path) = uri.to_file_path() {
+                    if let Some(dir) = file_path.parent() {
+                        if let Ok(entries) = std::fs::read_dir(dir) {
+                            for entry in entries.flatten() {
+                                let p = entry.path();
+                                if p.extension().and_then(|e| e.to_str()) == Some("strv")
+                                    && p != file_path
+                                {
+                                    if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
+                                        items.push(CompletionItem {
+                                            label: stem.to_string(),
+                                            kind: Some(CompletionItemKind::MODULE),
+                                            detail: Some("Local Striv module".to_string()),
+                                            ..Default::default()
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                for crate_name in ["minifb", "fastrand"] {
+                    items.push(CompletionItem {
+                        label: crate_name.to_string(),
+                        kind: Some(CompletionItemKind::MODULE),
+                        detail: Some("Rust crate (from striv.toml)".to_string()),
+                        ..Default::default()
+                    });
+                }
+                return Ok(Some(CompletionResponse::Array(items)));
+            }
+        }
+
+        let mut parsed =
+            catch_unwind(AssertUnwindSafe(|| Parser::new(&clean_src).parse_program())).ok();
+        let mut unimported_fns: Vec<(String, String, String)> = Vec::new();
+        if let (Some(prog), Ok(file_path)) = (&mut parsed, uri.to_file_path()) {
+            if let Some(dir) = file_path.parent() {
+                let ext = file_path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("strv");
+                for imp in &prog.imports {
+                    let dep_path = dir.join(format!("{}.{}", imp, ext));
+                    if let Ok(dep_src) = std::fs::read_to_string(&dep_path) {
+                        if let Ok(dep_prog) =
+                            catch_unwind(AssertUnwindSafe(|| Parser::new(&dep_src).parse_program()))
+                        {
+                            prog.structs.extend(dep_prog.structs);
+                            prog.functions.extend(dep_prog.functions);
+                        }
+                    }
+                }
+                if let Ok(entries) = std::fs::read_dir(dir) {
+                    for entry in entries.flatten() {
+                        let p = entry.path();
+                        if p.extension().and_then(|e| e.to_str()) == Some(ext) && p != file_path {
+                            if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
+                                if !prog.imports.iter().any(|i| i == stem) {
+                                    if let Ok(dep_src) = std::fs::read_to_string(&p) {
+                                        if let Ok(dep_prog) = catch_unwind(AssertUnwindSafe(|| {
+                                            Parser::new(&dep_src).parse_program()
+                                        })) {
+                                            for f in dep_prog
+                                                .functions
+                                                .iter()
+                                                .filter(|f| !f.name.contains("__"))
+                                            {
+                                                unimported_fns.push((
+                                                    f.name.clone(),
+                                                    format_fn_sig(f),
+                                                    stem.to_string(),
+                                                ));
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
         // --- CASE 0: Path access (`Key::` or `Window::`) ---
         if let Some(colon_idx) = before_cursor.rfind("::").filter(|&i| {
@@ -373,7 +460,8 @@ impl LanguageServer for StrivLsp {
 
         // --- CASE 3: General context (keywords with trailing space + functions) ---
         let keywords_with_space = [
-            "tweak", "struct", "impl", "fn", "let", "mut", "if", "while", "for", "in", "return",
+            "use", "tweak", "struct", "impl", "fn", "let", "mut", "if", "while", "for", "in",
+            "return",
         ];
         for kw in keywords_with_space {
             items.push(CompletionItem {
@@ -462,23 +550,59 @@ impl LanguageServer for StrivLsp {
                     kind: Some(CompletionItemKind::FUNCTION),
                     insert_text: Some(format!("{}($0)", func.name)),
                     insert_text_format: Some(InsertTextFormat::SNIPPET),
+                    detail: Some(format_fn_sig(func)),
                     sort_text: Some(format!("0_{}", func.name)),
                     ..Default::default()
                 });
             }
         }
+        for (fn_name, sig, mod_name) in unimported_fns {
+            items.push(CompletionItem {
+                label: fn_name.clone(),
+                kind: Some(CompletionItemKind::FUNCTION),
+                insert_text: Some(format!("{}($0)", fn_name)),
+                insert_text_format: Some(InsertTextFormat::SNIPPET),
+                detail: Some(format!("{} (auto-import `use {}`)", sig, mod_name)),
+                additional_text_edits: Some(vec![TextEdit {
+                    range: Range::new(Position::new(0, 0), Position::new(0, 0)),
+                    new_text: format!("use {}\n", mod_name),
+                }]),
+                sort_text: Some(format!("1_{}", fn_name)),
+                ..Default::default()
+            });
+        }
 
-        // Suggest auto-bindgen type names (e.g. `Rng`, `Window`, `Key`)
+        // Suggest auto-bindgen type names (e.g. `Rng`, `Window`, `Key`) with auto-import if missing
+        let imported_set: std::collections::HashSet<&str> = parsed
+            .as_ref()
+            .map(|p| p.imports.iter().map(|s| s.as_str()).collect())
+            .unwrap_or_default();
         let mut seen_types = std::collections::HashSet::new();
         for (s_name, _, _, _) in lang_runtime::generated_bridge::exported_symbols() {
             if let Some((ty, _)) = s_name.split_once("__") {
                 if seen_types.insert(ty) {
-                    items.push(CompletionItem {
+                    let crate_name = lang_runtime::generated_bridge::exported_crates()
+                        .iter()
+                        .find(|(n, _)| *n == ty)
+                        .map(|(_, c)| *c);
+                    let mut item = CompletionItem {
                         label: ty.to_string(),
                         kind: Some(CompletionItemKind::STRUCT),
                         sort_text: Some(format!("1_{}", ty)),
                         ..Default::default()
-                    });
+                    };
+                    if let Some(cr) = crate_name {
+                        if !imported_set.contains(cr) {
+                            item.detail = Some(format!("{} (auto-import `use {}`)", cr, cr));
+                            item.additional_text_edits = Some(vec![TextEdit {
+                                range: Range::new(Position::new(0, 0), Position::new(0, 0)),
+                                new_text: format!("use {}\n", cr),
+                            }]);
+                        } else {
+                            item.detail = Some(format!("from `{}`", cr));
+                        }
+                    }
+                    items.push(item);
                 }
             }
         }
@@ -512,8 +636,9 @@ impl LanguageServer for StrivLsp {
     // 3. HOVER DOCUMENTATION
     async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
         let docs = self.documents.read().await;
+        let uri = &params.text_document_position_params.text_document.uri;
         let pos = params.text_document_position_params.position;
-        let Some(src) = docs.get(&params.text_document_position_params.text_document.uri) else {
+        let Some(src) = docs.get(uri) else {
             return Ok(None);
         };
         let lines: Vec<&str> = src.lines().collect();
@@ -570,38 +695,16 @@ impl LanguageServer for StrivLsp {
             }));
         }
 
-        if let Ok(prog) = catch_unwind(AssertUnwindSafe(|| Parser::new(src).parse_program())) {
+        if let Some(prog) = parse_with_imports(src, uri) {
             if let Some(func) = prog
                 .functions
                 .iter()
                 .find(|f| f.name == lookup_key || f.name == token)
             {
-                let params_str: Vec<String> = func
-                    .params
-                    .iter()
-                    .map(|(n, ty, is_mut)| {
-                        let m = if *is_mut { "mut " } else { "" };
-                        if n == "self" {
-                            format!("{}self", m)
-                        } else {
-                            format!("{}{}: {}", m, n, ty)
-                        }
-                    })
-                    .collect();
-                let ret_str = func
-                    .ret_type
-                    .as_ref()
-                    .map(|r| format!(" -> {}", r))
-                    .unwrap_or_default();
                 return Ok(Some(Hover {
                     contents: HoverContents::Markup(MarkupContent {
                         kind: MarkupKind::Markdown,
-                        value: format!(
-                            "```striv\nfn {}({}){}\n```",
-                            func.name.replace("__", "."),
-                            params_str.join(", "),
-                            ret_str
-                        ),
+                        value: format!("```striv\n{}\n```", format_fn_sig(func)),
                     }),
                     range: None,
                 }));
@@ -614,8 +717,9 @@ impl LanguageServer for StrivLsp {
     // 4. SIGNATURE HELP (active parameter hint inside `(...)`)
     async fn signature_help(&self, params: SignatureHelpParams) -> Result<Option<SignatureHelp>> {
         let docs = self.documents.read().await;
+        let uri = &params.text_document_position_params.text_document.uri;
         let pos = params.text_document_position_params.position;
-        let Some(src) = docs.get(&params.text_document_position_params.text_document.uri) else {
+        let Some(src) = docs.get(uri) else {
             return Ok(None);
         };
         let lines: Vec<&str> = src.lines().collect();
@@ -674,32 +778,13 @@ impl LanguageServer for StrivLsp {
             return Ok(Some(build_signature_help(sig, doc, comma_count)));
         }
 
-        if let Ok(prog) = catch_unwind(AssertUnwindSafe(|| Parser::new(src).parse_program())) {
+        if let Some(prog) = parse_with_imports(src, uri) {
             if let Some(func) = prog
                 .functions
                 .iter()
                 .find(|f| f.name == lookup_key || f.name == fn_expr)
             {
-                let params_str: Vec<String> = func
-                    .params
-                    .iter()
-                    .filter(|(n, _, _)| n != "self")
-                    .map(|(n, ty, is_mut)| {
-                        let m = if *is_mut { "mut " } else { "" };
-                        format!("{}{}: {}", m, n, ty)
-                    })
-                    .collect();
-                let ret_str = func
-                    .ret_type
-                    .as_ref()
-                    .map(|r| format!(" -> {}", r))
-                    .unwrap_or_default();
-                let sig = format!(
-                    "fn {}({}){}",
-                    func.name.replace("__", "."),
-                    params_str.join(", "),
-                    ret_str
-                );
+                let sig = format_fn_sig(func);
                 return Ok(Some(build_signature_help(&sig, "", comma_count)));
             }
         }
@@ -707,14 +792,89 @@ impl LanguageServer for StrivLsp {
         Ok(None)
     }
 
-    // 5. INLAY HINTS (`: Type` after `let` and `for` variables, like rust-analyzer)
+    // 5. GO TO DEFINITION (Ctrl+Click)
+    async fn goto_definition(
+        &self,
+        params: GotoDefinitionParams,
+    ) -> Result<Option<GotoDefinitionResponse>> {
+        let docs = self.documents.read().await;
+        let uri = &params.text_document_position_params.text_document.uri;
+        let pos = params.text_document_position_params.position;
+        let Some(src) = docs.get(uri) else {
+            return Ok(None);
+        };
+        let lines: Vec<&str> = src.lines().collect();
+        let line = lines.get(pos.line as usize).copied().unwrap_or("");
+        let col = (pos.character as usize).min(line.len());
+        let sym = extract_symbol_at(line, col);
+        let name = sym.split('.').last().unwrap_or(&sym);
+        if name.is_empty() {
+            return Ok(None);
+        }
+
+        if let Some(loc) = find_def_in_source(uri, src, name) {
+            return Ok(Some(GotoDefinitionResponse::Scalar(loc)));
+        }
+
+        // Check Rust crate locations (`Window::new`, `win.is_key_down`, `Key::Left`, `Window`)
+        let lookup_key = if let Some((ty, member)) = sym.split_once("::") {
+            format!("{}__{}", ty, member)
+        } else if let Some((recv, method)) = sym.split_once('.') {
+            let visible = collect_visible_vars(&lines, pos.line as usize);
+            if let Some((_, ty)) = visible.iter().find(|(n, _)| n == recv) {
+                format!("{}__{}", ty, method)
+            } else {
+                sym.clone()
+            }
+        } else {
+            sym.clone()
+        };
+        if let Some((_, rs_file, rs_line)) = lang_runtime::generated_bridge::exported_locations()
+            .iter()
+            .find(|(n, _, _)| *n == lookup_key || *n == sym)
+        {
+            if let Ok(rs_uri) = Url::from_file_path(rs_file) {
+                return Ok(Some(GotoDefinitionResponse::Scalar(Location::new(
+                    rs_uri,
+                    Range::new(Position::new(*rs_line, 0), Position::new(*rs_line, 0)),
+                ))));
+            }
+        }
+
+        if let (Some(prog), Ok(file_path)) = (
+            catch_unwind(AssertUnwindSafe(|| Parser::new(src).parse_program())).ok(),
+            uri.to_file_path(),
+        ) {
+            if let Some(dir) = file_path.parent() {
+                let ext = file_path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("strv");
+                for imp in &prog.imports {
+                    let dep_path = dir.join(format!("{}.{}", imp, ext));
+                    if let Ok(dep_src) = std::fs::read_to_string(&dep_path) {
+                        if let Ok(dep_uri) = Url::from_file_path(&dep_path) {
+                            if let Some(loc) = find_def_in_source(&dep_uri, &dep_src, name) {
+                                return Ok(Some(GotoDefinitionResponse::Scalar(loc)));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(None)
+    }
+
+    // 6. INLAY HINTS (`: Type` after `let` and `for` variables, like rust-analyzer)
     async fn inlay_hint(&self, params: InlayHintParams) -> Result<Option<Vec<InlayHint>>> {
         let docs = self.documents.read().await;
-        let Some(src) = docs.get(&params.text_document.uri) else {
+        let uri = &params.text_document.uri;
+        let Some(src) = docs.get(uri) else {
             return Ok(None);
         };
 
-        let prog = catch_unwind(AssertUnwindSafe(|| Parser::new(src).parse_program())).ok();
+        let prog = parse_with_imports(src, uri);
         let mut hints = Vec::new();
         let start_line = params.range.start.line as usize;
         let end_line = params.range.end.line as usize;
@@ -987,4 +1147,79 @@ fn collect_visible_vars(lines: &[&str], cursor_line: usize) -> Vec<(String, Stri
         }
     }
     vars
+}
+
+fn format_fn_sig(func: &striv_syntax::Function) -> String {
+    let params_str: Vec<String> = func
+        .params
+        .iter()
+        .map(|(n, ty, is_mut)| {
+            let m = if *is_mut { "mut " } else { "" };
+            if n == "self" {
+                format!("{}self", m)
+            } else {
+                format!("{}{}: {}", m, n, ty)
+            }
+        })
+        .collect();
+    let ret_str = func
+        .ret_type
+        .as_ref()
+        .map(|r| format!(" -> {}", r))
+        .unwrap_or_default();
+    format!(
+        "fn {}({}){}",
+        func.name.replace("__", "."),
+        params_str.join(", "),
+        ret_str
+    )
+}
+
+fn parse_with_imports(src: &str, uri: &Url) -> Option<striv_syntax::Program> {
+    let mut prog = catch_unwind(AssertUnwindSafe(|| Parser::new(src).parse_program())).ok()?;
+    if let Ok(file_path) = uri.to_file_path() {
+        if let Some(dir) = file_path.parent() {
+            let ext = file_path
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("strv");
+            for imp in &prog.imports {
+                let dep_path = dir.join(format!("{}.{}", imp, ext));
+                if let Ok(dep_src) = std::fs::read_to_string(&dep_path) {
+                    if let Ok(dep_prog) =
+                        catch_unwind(AssertUnwindSafe(|| Parser::new(&dep_src).parse_program()))
+                    {
+                        prog.structs.extend(dep_prog.structs);
+                        prog.functions.extend(dep_prog.functions);
+                    }
+                }
+            }
+        }
+    }
+    Some(prog)
+}
+
+fn find_def_in_source(uri: &Url, src: &str, name: &str) -> Option<Location> {
+    let fn_pat = format!("fn {}(", name);
+    let fn_pat_sp = format!("fn {} (", name);
+    let st_pat = format!("struct {} ", name);
+    let st_pat_br = format!("struct {}{{", name);
+    for (idx, line) in src.lines().enumerate() {
+        let t = line.trim_start();
+        if t.starts_with(&fn_pat)
+            || t.starts_with(&fn_pat_sp)
+            || t.starts_with(&st_pat)
+            || t.starts_with(&st_pat_br)
+        {
+            let col = line.find(name).unwrap_or(0) as u32;
+            return Some(Location::new(
+                uri.clone(),
+                Range::new(
+                    Position::new(idx as u32, col),
+                    Position::new(idx as u32, col + name.len() as u32),
+                ),
+            ));
+        }
+    }
+    None
 }

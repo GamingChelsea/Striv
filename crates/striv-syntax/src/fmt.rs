@@ -3,6 +3,13 @@ use crate::{Expr, Function, Op, Program, Stmt};
 pub fn format_program(prog: &Program) -> String {
     let mut out = String::new();
 
+    for imp in &prog.imports {
+        out.push_str(&format!("use {}\n", imp));
+    }
+    if !prog.imports.is_empty() {
+        out.push('\n');
+    }
+
     for (n, v) in &prog.tweaks {
         match v {
             crate::TweakVal::Int(i) => out.push_str(&format!("tweak {} = {}\n", n, i)),

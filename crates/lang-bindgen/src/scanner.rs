@@ -10,6 +10,8 @@ use syn::{
 pub struct EnumInfo {
     pub name: String,
     pub variants: Vec<String>,
+    pub file: String,
+    pub line: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -45,6 +47,8 @@ pub struct MethodInfo {
     pub ret: RetKind,
     pub ret_str: String,
     pub doc: String,
+    pub file: String,
+    pub line: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -293,9 +297,12 @@ pub fn scan_crate_api(crate_name: &str, lib_rs: &Path) -> CrateApi {
                     && !e.variants.is_empty()
                     && !enums.iter().any(|x: &EnumInfo| x.name == name)
                 {
+                    let line = find_line_in_file(file_path, &format!("enum {}", name));
                     enums.push(EnumInfo {
                         name,
                         variants: e.variants.iter().map(|v| v.ident.to_string()).collect(),
+                        file: file_path.to_string_lossy().to_string(),
+                        line,
                     });
                 }
             }
@@ -329,6 +336,10 @@ pub fn scan_crate_api(crate_name: &str, lib_rs: &Path) -> CrateApi {
     let mut methods = Vec::new();
 
     for s_name in &default_structs {
+        let s_file = struct_files
+            .get(s_name)
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default();
         methods.push(MethodInfo {
             struct_name: Some(s_name.clone()),
             name: "default".to_string(),
@@ -338,6 +349,8 @@ pub fn scan_crate_api(crate_name: &str, lib_rs: &Path) -> CrateApi {
             ret: RetKind::Handle(s_name.clone()),
             ret_str: s_name.clone(),
             doc: format!("Returns the default `{}`.", s_name),
+            file: s_file,
+            line: 0,
         });
     }
 
@@ -373,6 +386,8 @@ pub fn scan_crate_api(crate_name: &str, lib_rs: &Path) -> CrateApi {
                             ret: RetKind::Handle(struct_name.clone()),
                             ret_str: struct_name.clone(),
                             doc: format!("Returns the default `{}`.", struct_name),
+                            file: file_path.to_string_lossy().to_string(),
+                            line: find_line_in_file(file_path, "fn default("),
                         });
                     }
                     continue;
@@ -389,6 +404,8 @@ pub fn scan_crate_api(crate_name: &str, lib_rs: &Path) -> CrateApi {
                             parse_sig(Some(&struct_name), &m.sig, &enum_names, &structs)
                         {
                             info.doc = extract_docs(&m.attrs);
+                            info.file = file_path.to_string_lossy().to_string();
+                            info.line = find_line_in_file(file_path, &format!("fn {}(", info.name));
                             if !methods
                                 .iter()
                                 .any(|x| x.struct_name == info.struct_name && x.name == info.name)
@@ -406,6 +423,8 @@ pub fn scan_crate_api(crate_name: &str, lib_rs: &Path) -> CrateApi {
             {
                 if let Some(mut info) = parse_sig(None, &f.sig, &enum_names, &structs) {
                     info.doc = extract_docs(&f.attrs);
+                    info.file = file_path.to_string_lossy().to_string();
+                    info.line = find_line_in_file(file_path, &format!("fn {}(", info.name));
                     if !methods
                         .iter()
                         .any(|x| x.struct_name == info.struct_name && x.name == info.name)
@@ -432,6 +451,18 @@ fn type_ident(ty: &Type) -> Option<String> {
     } else {
         None
     }
+}
+
+fn find_line_in_file(path: &Path, needle: &str) -> u32 {
+    let Ok(src) = fs::read_to_string(path) else {
+        return 0;
+    };
+    for (idx, line) in src.lines().enumerate() {
+        if line.contains(needle) {
+            return idx as u32;
+        }
+    }
+    0
 }
 
 fn extract_docs(attrs: &[syn::Attribute]) -> String {
@@ -511,6 +542,8 @@ fn parse_sig(
         ret,
         ret_str,
         doc: String::new(),
+        file: String::new(),
+        line: 0,
     })
 }
 

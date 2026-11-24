@@ -1,16 +1,5 @@
-fn safe_div(a: int, b: int) -> Result {
-    if b == 0 {
-        return Err(1)
-    }
-    return Ok(a / b)
-}
-
-fn find_bonus(x: int) -> Option {
-    if x > 200 {
-        return Some(50)
-    }
-    return None
-}
+use math_helpers
+use minifb
 
 fn fill_rect(mut buf: Vec, x0: int, y0: int, w: int, h: int, color: int) {
     for y in y0..y0 + h {

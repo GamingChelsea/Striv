@@ -1,0 +1,13 @@
+fn safe_div(a: int, b: int) -> Result {
+    if b == 0 {
+        return Err(1)
+    }
+    return Ok(a / b)
+}
+
+fn find_bonus(x: int) -> Option {
+    if x > 200 {
+        return Some(50)
+    }
+    return None
+}
