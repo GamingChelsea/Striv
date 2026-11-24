@@ -21,8 +21,13 @@ fn main() {
             let elapsed = start.elapsed();
 
             let main_fn: fn() -> i64 = unsafe { mem::transmute(ptr) };
+            let exec_start = Instant::now();
             let res = main_fn();
-            println!("Compiled in {:?} -> Result: {}", elapsed, res);
+            let exec_elapsed = exec_start.elapsed();
+            println!(
+                "Compiled in {:?} | Executed in {:?} -> Result: {}",
+                elapsed, exec_elapsed, res
+            );
         }
         "fmt" => {
             let path = args

@@ -27,6 +27,17 @@ pub fn transpile_to_rust(prog: &Program) -> String {
         out.push('\n');
     }
 
+    for (name, expr) in &prog.consts {
+        out.push_str(&format!(
+            "const {}: i64 = {};\n",
+            name,
+            emit_expr(expr, &struct_names)
+        ));
+    }
+    if !prog.consts.is_empty() {
+        out.push('\n');
+    }
+
     // 2. User-defined enums -> constant i64 modules
     for e in &prog.enums {
         out.push_str(&format!("pub mod {} {{\n", e.name));
@@ -380,7 +391,12 @@ fn emit_expr(expr: &Expr, structs: &HashSet<String>) -> String {
                 Op::Div => "/",
                 Op::Lt => "<",
                 Op::Gt => ">",
+                Op::LtEq => "<=",
+                Op::GtEq => ">=",
                 Op::Eq => "==",
+                Op::NotEq => "!=",
+                Op::And => "&&",
+                Op::Or => "||",
             };
             format!(
                 "({} {} {})",

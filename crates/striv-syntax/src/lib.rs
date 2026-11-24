@@ -29,6 +29,7 @@ pub enum MatchPat {
 pub struct Program {
     pub imports: Vec<String>,
     pub tweaks: Vec<(String, TweakVal)>,
+    pub consts: Vec<(String, Expr)>,
     pub enums: Vec<EnumDef>,
     pub structs: Vec<StructDef>,
     pub functions: Vec<Function>,
@@ -173,7 +174,12 @@ pub enum Op {
     Div,
     Lt,
     Gt,
+    LtEq,
+    GtEq,
     Eq,
+    NotEq,
+    And,
+    Or,
 }
 
 // Lexer
@@ -183,6 +189,12 @@ pub enum Op {
 pub enum Token {
     #[token("fn")]
     Fn,
+    #[token("const")]
+    Const,
+    #[token("true")]
+    True,
+    #[token("false")]
+    False,
     #[token("enum")]
     Enum,
     #[token("match")]
@@ -255,6 +267,16 @@ pub enum Token {
     Arrow,
     #[token("==")]
     EqEq,
+    #[token("!=")]
+    NotEq,
+    #[token("<=")]
+    LtEq,
+    #[token(">=")]
+    GtEq,
+    #[token("&&")]
+    AndAnd,
+    #[token("||")]
+    OrOr,
     #[token("=>")]
     FatArrow,
     #[token("=")]
@@ -293,6 +315,9 @@ impl Token {
     pub fn display_name(&self) -> String {
         match self {
             Token::Fn => "`fn`".to_string(),
+            Token::Const => "`const`".to_string(),
+            Token::True => "`true`".to_string(),
+            Token::False => "`false`".to_string(),
             Token::Enum => "`enum`".to_string(),
             Token::Match => "`match`".to_string(),
             Token::Underscore => "`_`".to_string(),
@@ -331,6 +356,11 @@ impl Token {
             Token::MinusEq => "`-=`".to_string(),
             Token::Assign => "`=`".to_string(),
             Token::EqEq => "`==`".to_string(),
+            Token::NotEq => "`!=`".to_string(),
+            Token::LtEq => "`<=`".to_string(),
+            Token::GtEq => "`>=`".to_string(),
+            Token::AndAnd => "`&&`".to_string(),
+            Token::OrOr => "`||`".to_string(),
             Token::Plus => "`+`".to_string(),
             Token::Minus => "`-`".to_string(),
             Token::Star => "`*`".to_string(),
@@ -415,6 +445,7 @@ impl Parser {
     pub fn parse_program(&mut self) -> Program {
         let mut imports = Vec::new();
         let mut tweaks = Vec::new();
+        let mut consts = Vec::new();
         let mut enums = Vec::new();
         let mut structs = Vec::new();
         let mut functions = Vec::new();
@@ -480,8 +511,17 @@ impl Parser {
                     self.expect(Token::RBrace);
                 }
                 Token::Fn => functions.push(self.parse_function()),
+                Token::Const => {
+                    self.next(); // consume `const`
+                    let Some(Token::Ident(c_name)) = self.next() else {
+                        self.error("Expected name after `const`");
+                    };
+                    self.expect(Token::Assign);
+                    let expr = self.parse_expr();
+                    consts.push((c_name, expr));
+                }
                 t => panic!(
-                    "Expected `tweak`, `struct`, `impl`, or `fn`, found: {:?}",
+                    "Expected `tweak`, `const`, `struct`, `impl`, or `fn`, found: {:?}",
                     t
                 ),
             }
@@ -489,6 +529,7 @@ impl Parser {
         Program {
             imports,
             tweaks,
+            consts,
             enums,
             structs,
             functions,
@@ -886,20 +927,36 @@ impl Parser {
         }
     }
 
-    fn parse_expr(&mut self) -> Expr {
-        let mut left = self.parse_primary();
-        while let Some(op) = match self.peek() {
-            Some(Token::Plus) => Some(Op::Add),
-            Some(Token::Minus) => Some(Op::Sub),
-            Some(Token::Star) => Some(Op::Mul),
-            Some(Token::Slash) => Some(Op::Div),
-            Some(Token::Lt) => Some(Op::Lt),
-            Some(Token::Gt) => Some(Op::Gt),
-            Some(Token::EqEq) => Some(Op::Eq),
+    fn peek_op(&mut self) -> Option<(Op, u8)> {
+        match self.peek() {
+            Some(Token::OrOr) => Some((Op::Or, 1)),
+            Some(Token::AndAnd) => Some((Op::And, 2)),
+            Some(Token::EqEq) => Some((Op::Eq, 3)),
+            Some(Token::NotEq) => Some((Op::NotEq, 3)),
+            Some(Token::Lt) => Some((Op::Lt, 4)),
+            Some(Token::Gt) => Some((Op::Gt, 4)),
+            Some(Token::LtEq) => Some((Op::LtEq, 4)),
+            Some(Token::GtEq) => Some((Op::GtEq, 4)),
+            Some(Token::Plus) => Some((Op::Add, 5)),
+            Some(Token::Minus) => Some((Op::Sub, 5)),
+            Some(Token::Star) => Some((Op::Mul, 6)),
+            Some(Token::Slash) => Some((Op::Div, 6)),
             _ => None,
-        } {
+        }
+    }
+
+    fn parse_expr(&mut self) -> Expr {
+        self.parse_expr_bp(1)
+    }
+
+    fn parse_expr_bp(&mut self, min_bp: u8) -> Expr {
+        let mut left = self.parse_primary();
+        while let Some((op, bp)) = self.peek_op() {
+            if bp < min_bp {
+                break;
+            }
             self.next();
-            let right = self.parse_primary();
+            let right = self.parse_expr_bp(bp + 1);
             left = Expr::BinOp {
                 left: Box::new(left),
                 op,
@@ -953,6 +1010,8 @@ impl Parser {
                 Expr::Some(Box::new(inner))
             }
             Some(Token::NoneKw) => Expr::None,
+            Some(Token::True) => Expr::Int(1),
+            Some(Token::False) => Expr::Int(0),
             Some(Token::Int(v)) => Expr::Int(v),
             Some(Token::Hex(v)) => Expr::Hex(v),
             Some(Token::Float(v)) => Expr::Float(v),
@@ -1207,6 +1266,7 @@ pub fn load_program_with_imports(entry_path: &std::path::Path) -> Result<Program
     let mut combined = Program {
         imports: Vec::new(),
         tweaks: Vec::new(),
+        consts: Vec::new(),
         enums: Vec::new(),
         structs: Vec::new(),
         functions: Vec::new(),
@@ -1248,6 +1308,7 @@ fn load_recursive(
     }
 
     out.tweaks.extend(prog.tweaks);
+    out.consts.extend(prog.consts);
     out.enums.extend(prog.enums);
     out.structs.extend(prog.structs);
     out.functions.extend(prog.functions);

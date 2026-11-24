@@ -24,6 +24,13 @@ pub fn format_program(prog: &Program) -> String {
         out.push('\n');
     }
 
+    for (n, expr) in &prog.consts {
+        out.push_str(&format!("const {} = {}\n", n, format_expr(expr)));
+    }
+    if !prog.consts.is_empty() {
+        out.push('\n');
+    }
+
     for e in &prog.enums {
         out.push_str(&format!("enum {} {{\n", e.name));
         for v in &e.variants {
@@ -316,7 +323,12 @@ fn format_expr(expr: &Expr) -> String {
                 Op::Div => "/",
                 Op::Lt => "<",
                 Op::Gt => ">",
+                Op::LtEq => "<=",
+                Op::GtEq => ">=",
                 Op::Eq => "==",
+                Op::NotEq => "!=",
+                Op::And => "&&",
+                Op::Or => "||",
             };
             format!("{} {} {}", format_expr(left), op_str, format_expr(right))
         }

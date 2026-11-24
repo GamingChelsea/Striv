@@ -312,6 +312,11 @@ impl JitCompiler {
                 user_enums.insert(format!("{}__{}", e.name, v), idx as i64);
             }
         }
+        if !prog.consts.is_empty() {
+            for (c_name, c_val) in eval_comptime_consts(prog) {
+                user_enums.insert(c_name, c_val);
+            }
+        }
 
         // 1. Pre-register all functions so they can call each other
         let mut func_ids = Vec::new();
@@ -1370,7 +1375,13 @@ fn compile_expr(
                     .ins()
                     .load(env.int_ty, MemFlagsData::new(), ptr_val, 0)
             }
-            _ => panic!("Unknown integer variable: {}", name),
+            _ => {
+                if let Some(&c_val) = env.user_enums.get(name) {
+                    builder.ins().iconst(env.int_ty, c_val)
+                } else {
+                    panic!("Unknown integer variable: {}", name)
+                }
+            }
         },
         Expr::FieldAccess { var, field } => match vars.get(var) {
             Some(VarInfo::Struct {
@@ -1383,7 +1394,7 @@ fn compile_expr(
                     env.int_ty
                 };
                 let offset = field_offset(def, field);
-                builder.ins().stack_load(ty, env.int_ty, *slot, offset)
+                builder.ins().stack_load(env.int_ty, ty, *slot, offset)
             }
             Some(VarInfo::StructPtr {
                 ptr_var,
@@ -1420,7 +1431,11 @@ fn compile_expr(
                     Op::Div => builder.ins().fdiv(lf, rf),
                     Op::Lt => builder.ins().fcmp(FloatCC::LessThan, lf, rf),
                     Op::Gt => builder.ins().fcmp(FloatCC::GreaterThan, lf, rf),
+                    Op::LtEq => builder.ins().fcmp(FloatCC::LessThanOrEqual, lf, rf),
+                    Op::GtEq => builder.ins().fcmp(FloatCC::GreaterThanOrEqual, lf, rf),
                     Op::Eq => builder.ins().fcmp(FloatCC::Equal, lf, rf),
+                    Op::NotEq => builder.ins().fcmp(FloatCC::NotEqual, lf, rf),
+                    Op::And | Op::Or => panic!("Cannot use && or || on floats"),
                 }
             } else {
                 match op {
@@ -1430,7 +1445,36 @@ fn compile_expr(
                     Op::Div => builder.ins().sdiv(l, r),
                     Op::Lt => builder.ins().icmp(IntCC::SignedLessThan, l, r),
                     Op::Gt => builder.ins().icmp(IntCC::SignedGreaterThan, l, r),
+                    Op::LtEq => builder.ins().icmp(IntCC::SignedLessThanOrEqual, l, r),
+                    Op::GtEq => builder.ins().icmp(IntCC::SignedGreaterThanOrEqual, l, r),
                     Op::Eq => builder.ins().icmp(IntCC::Equal, l, r),
+                    Op::NotEq => builder.ins().icmp(IntCC::NotEqual, l, r),
+                    Op::And => {
+                        let lb = if builder.func.dfg.value_type(l) == types::I8 {
+                            l
+                        } else {
+                            builder.ins().icmp_imm(IntCC::NotEqual, l, 0)
+                        };
+                        let rb = if builder.func.dfg.value_type(r) == types::I8 {
+                            r
+                        } else {
+                            builder.ins().icmp_imm(IntCC::NotEqual, r, 0)
+                        };
+                        builder.ins().band(lb, rb)
+                    }
+                    Op::Or => {
+                        let lb = if builder.func.dfg.value_type(l) == types::I8 {
+                            l
+                        } else {
+                            builder.ins().icmp_imm(IntCC::NotEqual, l, 0)
+                        };
+                        let rb = if builder.func.dfg.value_type(r) == types::I8 {
+                            r
+                        } else {
+                            builder.ins().icmp_imm(IntCC::NotEqual, r, 0)
+                        };
+                        builder.ins().bor(lb, rb)
+                    }
                 }
             }
         }
@@ -1441,4 +1485,35 @@ fn compile_expr(
             args,
         } => compile_method_call(receiver, method, args, builder, vars, env),
     }
+}
+
+fn eval_comptime_consts(prog: &Program) -> HashMap<String, i64> {
+    let mut const_vals = HashMap::new();
+    for (c_name, c_expr) in &prog.consts {
+        let mut funcs: Vec<striv_syntax::Function> = prog
+            .functions
+            .iter()
+            .filter(|f| f.name != "main")
+            .cloned()
+            .collect();
+        funcs.push(striv_syntax::Function {
+            name: format!("__comptime_{}", c_name),
+            params: Vec::new(),
+            ret_type: Some("int".to_string()),
+            body: vec![Stmt::Return(c_expr.clone())],
+        });
+        let mini_prog = Program {
+            imports: Vec::new(),
+            tweaks: prog.tweaks.clone(),
+            consts: Vec::new(),
+            enums: prog.enums.clone(),
+            structs: prog.structs.clone(),
+            functions: funcs,
+        };
+        let mut jit = JitCompiler::new();
+        let ptr = jit.compile_program(&mini_prog);
+        let eval_fn: fn() -> i64 = unsafe { std::mem::transmute(ptr) };
+        const_vals.insert(c_name.clone(), eval_fn());
+    }
+    const_vals
 }

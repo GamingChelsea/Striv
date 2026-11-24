@@ -474,14 +474,22 @@ impl LanguageServer for StrivLsp {
 
         // --- CASE 3: General context (keywords with trailing space + functions) ---
         let keywords_with_space = [
-            "use", "tweak", "enum", "match", "struct", "impl", "fn", "let", "mut", "if", "while",
-            "for", "in", "return",
+            "use", "tweak", "const", "enum", "match", "struct", "impl", "fn", "let", "mut", "if",
+            "while", "for", "in", "return",
         ];
         for kw in keywords_with_space {
             items.push(CompletionItem {
                 label: kw.to_string(),
                 kind: Some(CompletionItemKind::KEYWORD),
                 insert_text: Some(format!("{} ", kw)),
+                sort_text: Some(format!("2_{}", kw)),
+                ..Default::default()
+            });
+        }
+        for kw in ["true", "false"] {
+            items.push(CompletionItem {
+                label: kw.to_string(),
+                kind: Some(CompletionItemKind::KEYWORD),
                 sort_text: Some(format!("2_{}", kw)),
                 ..Default::default()
             });
@@ -552,6 +560,15 @@ impl LanguageServer for StrivLsp {
                         ..Default::default()
                     });
                 }
+            }
+            for (c_name, _) in &prog.consts {
+                items.push(CompletionItem {
+                    label: c_name.clone(),
+                    kind: Some(CompletionItemKind::CONSTANT),
+                    detail: Some("const (comptime)".to_string()),
+                    sort_text: Some(format!("0_{}", c_name)),
+                    ..Default::default()
+                });
             }
             for (t_name, t_val) in &prog.tweaks {
                 let detail = match t_val {
