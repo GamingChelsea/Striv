@@ -639,6 +639,8 @@ impl LanguageServer for StrivLsp {
             "open",
             "extend",
             "unit",
+            "rust",
+            "query",
         ];
         for kw in keywords_with_space {
             items.push(CompletionItem {

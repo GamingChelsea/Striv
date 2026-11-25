@@ -318,6 +318,7 @@ fn mono_expr(
                     ctx.new_fns.push(Function {
                         name: mangled.clone(),
                         is_rpc: false,
+                        rust_body: None,
                         type_params: Vec::new(),
                         params: new_params,
                         ret_type: new_ret,

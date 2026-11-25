@@ -1,6 +1,8 @@
 pub mod collections;
+pub mod ecs;
 pub mod generated_bridge;
 pub use collections::*;
+pub use ecs::*;
 
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -467,6 +469,50 @@ pub extern "C" fn striv_check_gas() -> i64 {
             0
         }
     })
+}
+
+static NEXT_ANY_HANDLE: AtomicI64 = AtomicI64::new(1);
+static ANY_STORE: std::sync::OnceLock<
+    parking_lot::RwLock<std::collections::HashMap<i64, Box<dyn std::any::Any + Send + Sync>>>,
+> = std::sync::OnceLock::new();
+
+fn any_map()
+-> &'static parking_lot::RwLock<std::collections::HashMap<i64, Box<dyn std::any::Any + Send + Sync>>>
+{
+    ANY_STORE.get_or_init(|| parking_lot::RwLock::new(std::collections::HashMap::new()))
+}
+
+pub fn box_any_handle<T: std::any::Any + Send + Sync>(val: T) -> i64 {
+    let id = NEXT_ANY_HANDLE.fetch_add(1, Ordering::Relaxed);
+    any_map().write().insert(id, Box::new(val));
+    id
+}
+
+pub fn with_any_ref<T: std::any::Any, R>(id: i64, f: impl FnOnce(&T) -> R) -> R {
+    let guard = any_map().read();
+    let obj = guard
+        .get(&id)
+        .expect("Ungültiges Rust-Handle")
+        .downcast_ref::<T>()
+        .expect("Falscher Handle-Typ in rust fn");
+    f(obj)
+}
+
+pub fn with_any_mut<T: std::any::Any, R>(id: i64, f: impl FnOnce(&mut T) -> R) -> R {
+    let mut guard = any_map().write();
+    let obj = guard
+        .get_mut(&id)
+        .expect("Ungültiges Rust-Handle")
+        .downcast_mut::<T>()
+        .expect("Falscher Handle-Typ in rust fn");
+    f(obj)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_any_free(id: i64) {
+    if id > 0 {
+        any_map().write().remove(&id);
+    }
 }
 
 #[unsafe(no_mangle)]

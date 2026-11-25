@@ -140,6 +140,8 @@ struct CompileEnv<'a> {
     fn_ret_floats: &'a std::collections::HashSet<String>,
     sandbox_mode: bool,
     check_gas_ref: cranelift::codegen::ir::FuncRef,
+    ecs_set_ref: cranelift::codegen::ir::FuncRef,
+    ecs_query_run_ref: cranelift::codegen::ir::FuncRef,
     sync_layouts: &'a HashMap<String, usize>,
     svec_clear_ref: cranelift::codegen::ir::FuncRef,
     group_begin_ref: cranelift::codegen::ir::FuncRef,
@@ -261,6 +263,11 @@ impl JitCompiler {
         builder.symbol("striv_bytes_read_i64", lang_runtime::striv_bytes_read_i64 as *const u8);
         builder.symbol("striv_bytes_read_f64", lang_runtime::striv_bytes_read_f64 as *const u8);
         builder.symbol("striv_check_gas", lang_runtime::striv_check_gas as *const u8);
+        builder.symbol("striv_ecs_set", lang_runtime::striv_ecs_set as *const u8);
+        builder.symbol(
+            "striv_ecs_query_run",
+            lang_runtime::striv_ecs_query_run as *const u8,
+        );
         builder.symbol(
             "striv_svec_clear",
             lang_runtime::striv_svec_clear as *const u8,
@@ -650,6 +657,23 @@ impl JitCompiler {
             .module
             .declare_function("striv_check_gas", Linkage::Import, &sig_take_err)
             .unwrap();
+        let mut sig_5i_i = self.module.make_signature();
+        for _ in 0..5 {
+            sig_5i_i.params.push(AbiParam::new(int_ty));
+        }
+        sig_5i_i.returns.push(AbiParam::new(int_ty));
+        let ecs_set_id = self
+            .module
+            .declare_function("striv_ecs_set", Linkage::Import, &sig_5i_i)
+            .unwrap();
+        let mut sig_7i_v = self.module.make_signature();
+        for _ in 0..7 {
+            sig_7i_v.params.push(AbiParam::new(int_ty));
+        }
+        let ecs_query_run_id = self
+            .module
+            .declare_function("striv_ecs_query_run", Linkage::Import, &sig_7i_v)
+            .unwrap();
 
         let mut user_enums = HashMap::new();
         let mut enum_defs = HashMap::new();
@@ -954,6 +978,10 @@ impl JitCompiler {
                     fn_ret_floats: &fn_ret_floats,
                     sandbox_mode: self.sandbox_mode,
                     check_gas_ref: self.module.declare_func_in_func(check_gas_id, builder.func),
+                    ecs_set_ref: self.module.declare_func_in_func(ecs_set_id, builder.func),
+                    ecs_query_run_ref: self
+                        .module
+                        .declare_func_in_func(ecs_query_run_id, builder.func),
                     sync_layouts: &sync_layouts,
                     svec_clear_ref: self
                         .module
@@ -1201,6 +1229,7 @@ impl JitCompiler {
             prog.functions.push(striv_syntax::Function {
                 name: fn_name,
                 is_rpc: false,
+            rust_body: None,
                 type_params: Vec::new(),
                 params: Vec::new(),
                 ret_type: Some("int".to_string()),
@@ -1554,6 +1583,43 @@ fn compile_method_call(
             }
             _ => unreachable!(),
         };
+    }
+
+    if let Some(VarInfo::Handle { var, type_name, .. }) = vars.get(receiver).cloned() {
+        if type_name == "Ecs" && method == "set" {
+            let ecs_ptr = builder.use_var(var);
+            let ent_val = compile_expr(&args[0], builder, vars, env);
+            let (s_name, fields) = match &args[1] {
+                Expr::StructInit { name, fields } => (name.clone(), fields),
+                _ => panic!("ecs.set(ent, Struct {{ ... }}) expects a struct literal"),
+            };
+            let def = env.structs.get(&s_name).unwrap().clone();
+            let byte_size = struct_byte_size(&def);
+            let slot = builder.create_sized_stack_slot(StackSlotData::new(
+                StackSlotKind::ExplicitSlot,
+                byte_size,
+                3,
+            ));
+            let base = builder.ins().stack_addr(env.int_ty, slot, 0);
+            if def.sync_mask != 0 {
+                let zero = builder.ins().iconst(env.int_ty, 0);
+                builder.ins().store(MemFlagsData::new(), zero, base, 0);
+            }
+            for (f_name, f_expr) in fields {
+                let v = compile_expr(f_expr, builder, vars, env);
+                let off = field_offset(&def, f_name);
+                let f_ty = field_type(&def, f_name);
+                store_struct_field(builder, v, base, off, f_ty);
+            }
+            let tid = builder
+                .ins()
+                .iconst(env.int_ty, striv_syntax::fnv1a_64(&s_name));
+            let esz = builder.ins().iconst(env.int_ty, byte_size as i64);
+            let c = builder
+                .ins()
+                .call(env.ecs_set_ref, &[ecs_ptr, ent_val, tid, esz, base]);
+            return builder.inst_results(c)[0];
+        }
     }
 
     if let Some(VarInfo::Bytes { var, .. }) = vars.get(receiver).cloned() {
@@ -2484,6 +2550,84 @@ fn compile_stmt(
                 .expect("`break` can only be used inside a loop!");
             builder.ins().jump(break_bb, &[]);
             true
+        }
+        Stmt::Query {
+            terms,
+            ecs_var,
+            is_parallel,
+            ..
+        } => {
+            let ecs_ptr = match vars.get(ecs_var) {
+                Some(VarInfo::Handle { var, type_name, .. }) if type_name == "Ecs" => {
+                    builder.use_var(*var)
+                }
+                _ => panic!("'{}' is not an Ecs instance", ecs_var),
+            };
+            let key = format!(
+                "query:{}:{}:{}",
+                env.current_fn,
+                ecs_var,
+                terms
+                    .iter()
+                    .map(|(v, t, _)| format!("{}:{}", v, t))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            );
+            let (helper_name, captures) = env.par_helpers.get(&key).unwrap().clone();
+            let (helper_ref, _) = env.funcs.get(&helper_name).unwrap().clone();
+
+            let tids_slot = builder.create_sized_stack_slot(StackSlotData::new(
+                StackSlotKind::ExplicitSlot,
+                (terms.len().max(1) * 8) as u32,
+                3,
+            ));
+            for (i, (_, s_name, _)) in terms.iter().enumerate() {
+                let tid = builder
+                    .ins()
+                    .iconst(env.int_ty, striv_syntax::fnv1a_64(s_name));
+                builder
+                    .ins()
+                    .stack_store(env.int_ty, tid, tids_slot, (i * 8) as i32);
+            }
+
+            let cap_slot = builder.create_sized_stack_slot(StackSlotData::new(
+                StackSlotKind::ExplicitSlot,
+                (captures.len().max(1) * 8) as u32,
+                3,
+            ));
+            for (i, cap_name) in captures.iter().enumerate() {
+                let v = compile_expr(&Expr::Var(cap_name.clone()), builder, vars, env);
+                let v_i64 = if builder.func.dfg.value_type(v) == types::F64 {
+                    builder.ins().bitcast(env.int_ty, MemFlagsData::new(), v)
+                } else {
+                    v
+                };
+                builder
+                    .ins()
+                    .stack_store(env.int_ty, v_i64, cap_slot, (i * 8) as i32);
+            }
+
+            let tids_addr = builder.ins().stack_addr(env.int_ty, tids_slot, 0);
+            let comp_count = builder.ins().iconst(env.int_ty, terms.len() as i64);
+            let fn_addr = builder.ins().func_addr(env.int_ty, helper_ref);
+            let caps_addr = builder.ins().stack_addr(env.int_ty, cap_slot, 0);
+            let cap_count = builder.ins().iconst(env.int_ty, captures.len() as i64);
+            let par_flag = builder
+                .ins()
+                .iconst(env.int_ty, if *is_parallel { 1 } else { 0 });
+            builder.ins().call(
+                env.ecs_query_run_ref,
+                &[
+                    ecs_ptr,
+                    tids_addr,
+                    comp_count,
+                    fn_addr,
+                    caps_addr,
+                    cap_count,
+                    par_flag,
+                ],
+            );
+            false
         }
         Stmt::Continue => {
             let (cont_bb, _) = *env
@@ -3612,6 +3756,7 @@ fn collect_parallel_in_stmts(
                 *next_id += 1;
                 out_funcs.push(striv_syntax::Function {
                     is_rpc: false,
+            rust_body: None,
                     name: helper_name.clone(),
                     type_params: Vec::new(),
                     params,
@@ -3622,6 +3767,56 @@ fn collect_parallel_in_stmts(
                     format!("{}:{}:{}", fn_name, collection, var),
                     (helper_name, cap_names),
                 );
+            }
+            Stmt::Query {
+                terms,
+                ecs_var,
+                body,
+                ..
+            } => {
+                let mut bound = std::collections::HashSet::new();
+                for (v, _, _) in terms {
+                    bound.insert(v.clone());
+                }
+                let mut free = Vec::new();
+                collect_free_vars_in_stmts(body, &bound, &mut free);
+                let mut params: Vec<(String, String, bool)> = terms.clone();
+                let mut cap_names = Vec::new();
+                for cap in free {
+                    let (cap_ty, _) = local_types
+                        .get(&cap)
+                        .cloned()
+                        .unwrap_or_else(|| ("int".to_string(), false));
+                    let param_ty = if cap_ty == "float" {
+                        "__par_f64".to_string()
+                    } else {
+                        cap_ty
+                    };
+                    params.push((cap.clone(), param_ty, false));
+                    cap_names.push(cap);
+                }
+                let helper_name = format!("__ecs_query_{}", *next_id);
+                *next_id += 1;
+                out_funcs.push(striv_syntax::Function {
+                    is_rpc: false,
+                    rust_body: None,
+                    name: helper_name.clone(),
+                    type_params: Vec::new(),
+                    params,
+                    ret_type: None,
+                    body: body.clone(),
+                });
+                let key = format!(
+                    "query:{}:{}:{}",
+                    fn_name,
+                    ecs_var,
+                    terms
+                        .iter()
+                        .map(|(v, t, _)| format!("{}:{}", v, t))
+                        .collect::<Vec<_>>()
+                        .join(",")
+                );
+                helpers.insert(key, (helper_name, cap_names));
             }
             Stmt::If {
                 then_block,
@@ -3783,6 +3978,7 @@ pub fn eval_comptime_consts(prog: &Program) -> HashMap<String, i64> {
             .collect();
         funcs.push(striv_syntax::Function {
             is_rpc: false,
+            rust_body: None,
             name: format!("__comptime_{}", c_name),
             type_params: Vec::new(),
             params: Vec::new(),
@@ -3794,6 +3990,7 @@ pub fn eval_comptime_consts(prog: &Program) -> HashMap<String, i64> {
             tweaks: prog.tweaks.clone(),
             consts: Vec::new(),
             units: Vec::new(),
+            rust_blocks: Vec::new(),
             enums: prog.enums.clone(),
             structs: prog.structs.clone(),
             functions: funcs,

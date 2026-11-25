@@ -512,6 +512,9 @@ pub extern "C" fn striv_mat4_free(p: *mut Mat4D) {
 /// Central table of built-in stdlib methods: (Striv-Name, Symbol-Ptr, ABI-Sig, Mutates-Self?)
 pub fn std_collection_symbols() -> Vec<(&'static str, *const u8, &'static str, bool)> {
     vec![
+        ("Ecs::new", crate::ecs::striv_ecs_new as *const u8, "->i", false),
+        ("Ecs::spawn", crate::ecs::striv_ecs_spawn as *const u8, "i->i", false),
+        ("Ecs::remove_entity", crate::ecs::striv_ecs_remove_entity as *const u8, "ii->i", false),
         // Constructors
         ("Deque::new", striv_deque_new as *const u8, "->i", false),
         ("Map::new", striv_map_new as *const u8, "->i", false),
@@ -671,6 +674,7 @@ pub fn std_collection_symbols() -> Vec<(&'static str, *const u8, &'static str, b
 /// Central table of automatic Drop functions per type name!
 pub fn std_drop_symbols() -> Vec<(&'static str, *const u8)> {
     vec![
+        ("Ecs", crate::ecs::striv_ecs_free as *const u8),
         ("Deque", striv_deque_free as *const u8),
         ("Map", striv_map_free as *const u8),
         ("StrMap", striv_strmap_free as *const u8),

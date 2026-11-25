@@ -216,6 +216,7 @@ fn format_stmt(stmt: &Stmt, level: usize, out: &mut String) {
         }
         Stmt::Break => out.push_str(&format!("{}break\n", ind)),
         Stmt::Continue => out.push_str(&format!("{}continue\n", ind)),
+        Stmt::Query { .. } => out.push_str(&format!("{}// query\n", ind)),
         Stmt::Defer(inner) => {
             out.push_str(&format!("{}defer ", ind));
             if let Stmt::Block(stmts) = &**inner {

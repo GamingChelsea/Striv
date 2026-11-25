@@ -60,6 +60,7 @@ pub struct Program {
     pub tweaks: Vec<(String, TweakVal)>,
     pub consts: Vec<(String, Expr)>,
     pub units: Vec<UnitDef>,
+    pub rust_blocks: Vec<String>,
     pub enums: Vec<EnumDef>,
     pub structs: Vec<StructDef>,
     pub functions: Vec<Function>,
@@ -78,6 +79,7 @@ pub struct StructDef {
 pub struct Function {
     pub name: String,
     pub is_rpc: bool,
+    pub rust_body: Option<String>,
     pub type_params: Vec<String>,
     pub params: Vec<(String, String, bool)>,
     pub ret_type: Option<String>,
@@ -135,6 +137,12 @@ pub enum Stmt {
     Yield,
     Break,
     Continue,
+    Query {
+        terms: Vec<(String, String, bool)>,
+        ecs_var: String,
+        is_parallel: bool,
+        body: Vec<Stmt>,
+    },
     BlockCall {
         name: String,
         args: Vec<Expr>,
@@ -353,6 +361,10 @@ pub enum Token {
     Extend,
     #[token("unit")]
     Unit,
+    #[token("rust")]
+    Rust,
+    #[token("query")]
+    Query,
     #[regex(r"[0-9]+(\.[0-9]+)?_[a-zA-Z][a-zA-Z0-9]*", |lex| {
         let s = lex.slice();
         let (num_s, unit_s) = s.split_once('_').unwrap();
@@ -493,6 +505,8 @@ impl Token {
             Token::Open => "`open`".to_string(),
             Token::Extend => "`extend`".to_string(),
             Token::Unit => "`unit`".to_string(),
+            Token::Rust => "`rust`".to_string(),
+            Token::Query => "`query`".to_string(),
             Token::UnitFloat((v, u)) => format!("{}_{}", v, u),
             Token::OkKw => "`Ok`".to_string(),
             Token::ErrKw => "`Err`".to_string(),
@@ -551,6 +565,7 @@ pub struct ParseError {
 
 pub struct Parser {
     tokens: Vec<(Token, std::ops::Range<usize>)>,
+    src: String,
     src_len: usize,
     pos: usize,
 }
@@ -563,6 +578,7 @@ impl Parser {
             .collect();
         Self {
             tokens,
+            src: src.to_string(),
             src_len: src.len(),
             pos: 0,
         }
@@ -613,6 +629,7 @@ impl Parser {
         let mut tweaks = Vec::new();
         let mut consts = Vec::new();
         let mut units = Vec::new();
+        let mut rust_blocks = Vec::new();
         let mut enums = Vec::new();
         let mut structs = Vec::new();
         let mut functions = Vec::new();
@@ -692,6 +709,16 @@ impl Parser {
                     self.expect(Token::RBrace);
                 }
                 Token::Fn => functions.push(self.parse_function()),
+                Token::Rust => {
+                    self.next();
+                    if self.peek() == Some(&Token::Fn) {
+                        let mut f = self.parse_function_sig_only();
+                        f.rust_body = Some(self.parse_raw_brace_block());
+                        functions.push(f);
+                    } else {
+                        rust_blocks.push(self.parse_raw_brace_block());
+                    }
+                }
                 Token::Rpc => {
                     self.next();
                     let mut f = self.parse_function();
@@ -742,6 +769,7 @@ impl Parser {
             tweaks,
             consts,
             units,
+            rust_blocks,
             enums,
             structs,
             functions,
@@ -774,6 +802,60 @@ impl Parser {
             self.error("Expected unit name or '(' in unit formula");
         };
         UnitExpr::Name(name)
+    }
+
+    fn parse_query_stmt(&mut self, is_parallel: bool) -> Stmt {
+        self.expect(Token::Query);
+        self.expect(Token::LParen);
+        let mut terms = Vec::new();
+        while self.peek() != Some(&Token::RParen) {
+            let is_mut = if self.peek() == Some(&Token::Mut) {
+                self.next();
+                true
+            } else {
+                false
+            };
+            let Some(Token::Ident(v_name)) = self.next() else {
+                self.error("Expected variable name in `query`");
+            };
+            self.expect(Token::Colon);
+            let ty = self.parse_type_name();
+            terms.push((v_name, ty, is_mut));
+            if self.peek() == Some(&Token::Comma) {
+                self.next();
+            }
+        }
+        self.expect(Token::RParen);
+        self.expect(Token::In);
+        let Some(Token::Ident(ecs_var)) = self.next() else {
+            self.error("Expected ECS variable after `in`");
+        };
+        let body = self.parse_block();
+        Stmt::Query {
+            terms,
+            ecs_var,
+            is_parallel,
+            body,
+        }
+    }
+
+    fn parse_raw_brace_block(&mut self) -> String {
+        self.expect(Token::LBrace);
+        let open_end = self.tokens[self.pos - 1].1.end;
+        let mut depth = 1usize;
+        while self.pos < self.tokens.len() && depth > 0 {
+            match self.tokens[self.pos].0 {
+                Token::LBrace => depth += 1,
+                Token::RBrace => depth -= 1,
+                _ => {}
+            }
+            self.pos += 1;
+        }
+        if depth != 0 {
+            self.error("Unclosed `{` in `rust` block");
+        }
+        let close_start = self.tokens[self.pos - 1].1.start;
+        self.src[open_end..close_start].to_string()
     }
 
     fn parse_enum(&mut self) -> EnumDef {
@@ -900,14 +982,21 @@ impl Parser {
         Function {
             name: format!("{}__{}", struct_name, m_name),
             is_rpc: false,
+        rust_body: None,
             type_params: Vec::new(),
             params,
             ret_type,
-            body: self.parse_block(),
+            body: Vec::new(),
         }
     }
 
     pub fn parse_function(&mut self) -> Function {
+        let mut f = self.parse_function_sig_only();
+        f.body = self.parse_block();
+        f
+    }
+
+    fn parse_function_sig_only(&mut self) -> Function {
         self.expect(Token::Fn);
         let Some(Token::Ident(name)) = self.next() else {
             panic!("Function Name expected")
@@ -957,10 +1046,11 @@ impl Parser {
         Function {
             name,
             is_rpc: false,
+        rust_body: None,
             type_params,
             params,
             ret_type,
-            body: self.parse_block(),
+            body: Vec::new(),
         }
     }
 
@@ -1148,6 +1238,7 @@ impl Parser {
                 self.next();
                 Stmt::Concurrent(self.parse_block())
             }
+            Some(Token::Query) => self.parse_query_stmt(false),
             Some(Token::Spawn) => {
                 self.next();
                 let Some(Token::Ident(name)) = self.next() else {
@@ -1160,6 +1251,9 @@ impl Parser {
             }
             Some(Token::Parallel) => {
                 self.next();
+                if self.peek() == Some(&Token::Query) {
+                    return self.parse_query_stmt(true);
+                }
                 if self.peek() != Some(&Token::For) {
                     self.error("Expected `for` after `parallel`");
                 }
@@ -1616,8 +1710,10 @@ impl Parser {
                             idx: idx as usize,
                         }
                     } else {
-                        let Some(Token::Ident(member)) = self.next() else {
-                            panic!("Member name expected after `.`")
+                        let member = match self.next() {
+                            Some(Token::Ident(m)) => m,
+                            Some(Token::Spawn) => "spawn".to_string(),
+                            _ => panic!("Member name expected after `.`"),
                         };
                         if self.peek() == Some(&Token::LParen) {
                             Expr::MethodCall {
@@ -1896,6 +1992,7 @@ pub fn load_program_with_imports(entry_path: &std::path::Path) -> Result<Program
         tweaks: Vec::new(),
         consts: Vec::new(),
         units: Vec::new(),
+        rust_blocks: Vec::new(),
         enums: Vec::new(),
         structs: Vec::new(),
         functions: Vec::new(),
@@ -1944,6 +2041,7 @@ fn load_recursive(
     out.tweaks.extend(prog.tweaks);
     out.consts.extend(prog.consts);
     out.units.extend(prog.units);
+    out.rust_blocks.extend(prog.rust_blocks);
     out.enums.extend(prog.enums);
     out.structs.extend(prog.structs);
     out.functions.extend(prog.functions);
@@ -2013,6 +2111,7 @@ pub fn expand_rpc_functions(prog: &mut Program) {
         prog.functions.push(Function {
             name: format!("{}_pack", rf.name),
             is_rpc: false,
+        rust_body: None,
             type_params: vec![],
             params: net_params_slice.to_vec(),
             ret_type: Some("Bytes".into()),
@@ -2113,6 +2212,7 @@ pub fn expand_rpc_functions(prog: &mut Program) {
     prog.functions.push(Function {
         name: "rpc_dispatch".into(),
         is_rpc: false,
+        rust_body: None,
         type_params: vec![],
         params: disp_params,
         ret_type: Some("int".into()),
