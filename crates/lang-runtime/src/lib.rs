@@ -102,6 +102,332 @@ pub extern "C" fn striv_tweak_get_str(idx: usize) -> *mut String {
 }
 
 /// Starts the live tweak dashboard in the background on http://localhost:4040.
+fn url_decode(s: &str) -> String {
+    let mut out = Vec::with_capacity(s.len());
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let (Some(h), Some(l)) = (
+                (bytes[i + 1] as char).to_digit(16),
+                (bytes[i + 2] as char).to_digit(16),
+            ) {
+                out.push(((h << 4) | l) as u8);
+                i += 3;
+                continue;
+            }
+        } else if bytes[i] == b'+' {
+            out.push(b' ');
+            i += 1;
+            continue;
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn json_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+fn apply_tweak_value(target: &str, val_str: &str) {
+    let list = registry().lock().unwrap();
+    if let Some(entry) = list.iter().find(|e| e.name == target) {
+        match &entry.kind {
+            TweakKind::Int(atom) => {
+                if let Ok(v) = val_str.trim().parse::<i64>() {
+                    atom.store(v, Ordering::Relaxed);
+                }
+            }
+            TweakKind::Str(m) => {
+                *m.lock().unwrap() = val_str.to_string();
+            }
+            TweakKind::Vec(m) => {
+                let parsed: Vec<i64> = val_str
+                    .split(',')
+                    .filter_map(|s| s.trim().parse::<i64>().ok())
+                    .collect();
+                *m.lock().unwrap() = parsed;
+            }
+        }
+    }
+}
+
+fn tweaks_as_json() -> String {
+    let list = registry().lock().unwrap();
+    let mut out = String::from("[");
+    for (i, entry) in list.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        let group = entry
+            .name
+            .split_once('.')
+            .or_else(|| entry.name.split_once('_'))
+            .map(|(g, _)| g)
+            .unwrap_or("General");
+        match &entry.kind {
+            TweakKind::Int(atom) => {
+                let v = atom.load(Ordering::Relaxed);
+                out.push_str(&format!(
+                    r#"{{"name":"{}","group":"{}","type":"int","val":{}}}"#,
+                    json_escape(&entry.name),
+                    json_escape(group),
+                    v
+                ));
+            }
+            TweakKind::Str(m) => {
+                let s = m.lock().unwrap().clone();
+                out.push_str(&format!(
+                    r#"{{"name":"{}","group":"{}","type":"str","val":"{}"}}"#,
+                    json_escape(&entry.name),
+                    json_escape(group),
+                    json_escape(&s)
+                ));
+            }
+            TweakKind::Vec(m) => {
+                let v = m.lock().unwrap().clone();
+                let joined: Vec<String> = v.iter().map(|x| x.to_string()).collect();
+                out.push_str(&format!(
+                    r#"{{"name":"{}","group":"{}","type":"vec","val":"{}"}}"#,
+                    json_escape(&entry.name),
+                    json_escape(group),
+                    json_escape(&joined.join(", "))
+                ));
+            }
+        }
+    }
+    out.push(']');
+    out
+}
+
+const TWEAK_DASHBOARD_HTML: &str = r#"<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Striv Live-Tweaks</title>
+<style>
+  :root { --bg:#0f1117; --card:#181b23; --card2:#1f2430; --border:#2b3140; --fg:#e6edf3; --muted:#8b949e; --accent:#58a6ff; --green:#3fb950; --warn:#d29922; }
+  * { box-sizing: border-box; }
+  body { font-family: system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--fg); max-width: 960px; margin: 0 auto; padding: 20px; }
+  header { display:flex; flex-wrap:wrap; gap:12px; align-items:center; justify-content:space-between; margin-bottom:16px; }
+  h2 { margin:0; font-size:20px; color:var(--accent); display:flex; align-items:center; gap:8px; }
+  .badge { font-size:12px; background:var(--card2); border:1px solid var(--border); padding:2px 8px; border-radius:999px; color:var(--muted); }
+  .toolbar { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:16px; position:sticky; top:0; background:var(--bg); padding:10px 0; z-index:10; border-bottom:1px solid var(--border); }
+  .search { flex:1; min-width:200px; background:var(--card); color:var(--fg); border:1px solid var(--border); border-radius:6px; padding:8px 12px; font-size:14px; outline:none; }
+  .search:focus { border-color:var(--accent); }
+  button, .pill { background:var(--card2); color:var(--fg); border:1px solid var(--border); border-radius:6px; padding:7px 12px; font-size:13px; cursor:pointer; }
+  button:hover, .pill:hover { border-color:var(--accent); }
+  .pill.active { background:var(--accent); color:#0b0e14; border-color:var(--accent); font-weight:600; }
+  .group { background:var(--card); border:1px solid var(--border); border-radius:8px; margin-bottom:12px; overflow:hidden; }
+  .group-hdr { display:flex; justify-content:space-between; align-items:center; padding:10px 14px; background:var(--card2); cursor:pointer; user-select:none; font-weight:600; }
+  .group-hdr:hover { background:#252b3b; }
+  .group-body { padding:10px 14px; display:grid; grid-template-columns:repeat(auto-fill, minmax(280px, 1fr)); gap:10px; }
+  .group.collapsed .group-body { display:none; }
+  .tweak { background:var(--bg); border:1px solid var(--border); border-radius:6px; padding:10px 12px; }
+  .tweak-top { display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:6px; }
+  .tweak-name { font-weight:600; font-size:13px; word-break:break-all; }
+  .tweak-type { font-size:11px; color:var(--muted); background:var(--card2); padding:1px 6px; border-radius:4px; }
+  .tweak-ctrl { display:flex; gap:6px; align-items:center; }
+  input[type=number], input[type=text] { flex:1; min-width:0; background:var(--card); color:var(--fg); border:1px solid var(--border); border-radius:4px; padding:5px 8px; font-size:13px; }
+  input[type=range] { width:100%; margin-top:8px; accent-color:var(--accent); }
+  .btn-xs { padding:4px 7px; font-size:12px; }
+  .status { font-size:12px; color:var(--green); min-height:16px; }
+</style>
+</head>
+<body>
+<header>
+  <h2>Striv Live-Tweaks <span id="countBadge" class="badge">0</span></h2>
+  <div style="display:flex;gap:8px;align-items:center;">
+    <span id="status" class="status"></span>
+    <button onclick="copyExport()">Exportieren</button>
+    <button onclick="resetAll()">Alle Reset</button>
+  </div>
+</header>
+<div class="toolbar">
+  <input id="search" class="search" type="search" placeholder="Suchen... (Shortcut: /)" oninput="render()">
+  <button class="pill active" onclick="setFilter('all', this)">Alle</button>
+  <button class="pill" onclick="setFilter('int', this)">Int</button>
+  <button class="pill" onclick="setFilter('str', this)">String</button>
+  <button class="pill" onclick="setFilter('vec', this)">Vec</button>
+  <button onclick="toggleAllGroups(false)">Alle auf</button>
+  <button onclick="toggleAllGroups(true)">Alle zu</button>
+  <button id="liveBtn" class="pill active" onclick="toggleLive()">Live: AN</button>
+</div>
+<div id="app"></div>
+<script>
+let tweaks = [];
+let initialVals = {};
+let filterType = 'all';
+let collapsed = JSON.parse(localStorage.getItem('striv_collapsed') || '{}');
+let livePoll = true;
+let sendTimer = {};
+
+function setStatus(msg) {
+  const el = document.getElementById('status');
+  el.textContent = msg;
+  clearTimeout(el._t);
+  el._t = setTimeout(() => el.textContent = '', 1800);
+}
+
+function setFilter(t, btn) {
+  filterType = t;
+  document.querySelectorAll('.toolbar .pill[onclick^="setFilter"]').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  render();
+}
+
+function toggleGroup(g) {
+  collapsed[g] = !collapsed[g];
+  localStorage.setItem('striv_collapsed', JSON.stringify(collapsed));
+  render();
+}
+
+function toggleAllGroups(state) {
+  const groups = [...new Set(tweaks.map(t => t.group))];
+  groups.forEach(g => collapsed[g] = state);
+  localStorage.setItem('striv_collapsed', JSON.stringify(collapsed));
+  render();
+}
+
+function toggleLive() {
+  livePoll = !livePoll;
+  const b = document.getElementById('liveBtn');
+  b.textContent = livePoll ? 'Live: AN' : 'Live: AUS';
+  b.classList.toggle('active', livePoll);
+}
+
+function sendVal(name, val, immediate) {
+  const item = tweaks.find(t => t.name === name);
+  if (item) item.val = item.type === 'int' ? (parseInt(val, 10) || 0) : val;
+  clearTimeout(sendTimer[name]);
+  const run = () => fetch('/set?name=' + encodeURIComponent(name) + '&val=' + encodeURIComponent(val));
+  if (immediate) run(); else sendTimer[name] = setTimeout(run, 50);
+}
+
+function resetOne(name) {
+  if (!(name in initialVals)) return;
+  sendVal(name, initialVals[name], true);
+  render();
+  setStatus('Reset: ' + name);
+}
+
+function resetAll() {
+  tweaks.forEach(t => { if (t.name in initialVals) sendVal(t.name, initialVals[t.name], true); });
+  render();
+  setStatus('Alle Werte zurückgesetzt');
+}
+
+function copyExport() {
+  const lines = tweaks.map(t => {
+    if (t.type === 'str') return `tweak ${t.name} = "${t.val}"`;
+    if (t.type === 'vec') return `tweak ${t.name} = [${t.val}]`;
+    return `tweak ${t.name} = ${t.val}`;
+  }).join('\n');
+  navigator.clipboard.writeText(lines).then(() => setStatus('Code kopiert!'));
+}
+
+function esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+}
+
+function render() {
+  const q = document.getElementById('search').value.trim().toLowerCase();
+  const filtered = tweaks.filter(t => {
+    if (filterType !== 'all' && t.type !== filterType) return false;
+    if (q && !t.name.toLowerCase().includes(q) && !t.group.toLowerCase().includes(q)) return false;
+    return true;
+  });
+  document.getElementById('countBadge').textContent = `${filtered.length} / ${tweaks.length}`;
+
+  const byGroup = {};
+  filtered.forEach(t => { (byGroup[t.group] = byGroup[t.group] || []).push(t); });
+
+  const app = document.getElementById('app');
+  if (filtered.length === 0) {
+    app.innerHTML = '<p style="color:var(--muted)">Keine passenden Tweaks gefunden.</p>';
+    return;
+  }
+
+  let html = '';
+  for (const [grp, items] of Object.entries(byGroup)) {
+    const isCol = !!collapsed[grp] && !q;
+    html += `<div class="group ${isCol ? 'collapsed' : ''}">
+      <div class="group-hdr" onclick="toggleGroup('${esc(grp)}')">
+        <span>${isCol ? '▸' : '▾'} ${esc(grp)}</span>
+        <span class="badge">${items.length}</span>
+      </div>
+      <div class="group-body">`;
+    for (const t of items) {
+      const id = 'id_' + btoa(unescape(encodeURIComponent(t.name))).replace(/=/g,'');
+      if (t.type === 'int') {
+        const v = Number(t.val) || 0;
+        const min = Math.min(0, v - 100);
+        const max = Math.max(100, v + 200);
+        html += `<div class="tweak">
+          <div class="tweak-top"><span class="tweak-name">${esc(t.name)}</span><span class="tweak-type">int</span></div>
+          <div class="tweak-ctrl">
+            <input id="${id}_n" type="number" value="${v}" oninput="document.getElementById('${id}_r').value=this.value;sendVal('${esc(t.name)}',this.value,true)">
+            <button class="btn-xs" title="Reset" onclick="resetOne('${esc(t.name)}')">↺</button>
+          </div>
+          <input id="${id}_r" type="range" min="${min}" max="${max}" value="${v}" oninput="document.getElementById('${id}_n').value=this.value;sendVal('${esc(t.name)}',this.value,true)">
+        </div>`;
+      } else {
+        html += `<div class="tweak">
+          <div class="tweak-top"><span class="tweak-name">${esc(t.name)}</span><span class="tweak-type">${t.type}</span></div>
+          <div class="tweak-ctrl">
+            <input type="text" value="${esc(t.val)}" oninput="sendVal('${esc(t.name)}',this.value,false)">
+            <button class="btn-xs" title="Reset" onclick="resetOne('${esc(t.name)}')">↺</button>
+          </div>
+        </div>`;
+      }
+    }
+    html += `</div></div>`;
+  }
+  app.innerHTML = html;
+}
+
+async function poll() {
+  if (!livePoll) return;
+  const active = document.activeElement;
+  if (active && (active.tagName === 'INPUT')) return;
+  try {
+    const res = await fetch('/api/tweaks');
+    const fresh = await res.json();
+    fresh.forEach(t => { if (!(t.name in initialVals)) initialVals[t.name] = t.val; });
+    if (JSON.stringify(fresh) !== JSON.stringify(tweaks)) {
+      tweaks = fresh;
+      render();
+    }
+  } catch (_) {}
+}
+
+document.addEventListener('keydown', e => {
+  if (e.key === '/' && document.activeElement.tagName !== 'INPUT') {
+    e.preventDefault();
+    document.getElementById('search').focus();
+  }
+});
+
+poll();
+setInterval(poll, 700);
+</script>
+</body>
+</html>"#;
+
 pub fn start_tweak_server() {
     thread::spawn(|| {
         let Ok(server) = tiny_http::Server::http("127.0.0.1:4040") else {
@@ -112,129 +438,44 @@ pub fn start_tweak_server() {
         for request in server.incoming_requests() {
             let url = request.url().to_string();
 
-            // 1. Receive update from browser: /set?name=dmg&val=50
             if let Some(query) = url.strip_prefix("/set?") {
-                let mut target = "";
+                let mut target = String::new();
                 let mut raw_val = None;
                 for pair in query.split('&') {
                     if let Some((k, v)) = pair.split_once('=') {
                         if k == "name" {
-                            target = v;
-                        }
-                        if k == "val" {
-                            raw_val = Some(v);
+                            target = url_decode(v);
+                        } else if k == "val" {
+                            raw_val = Some(url_decode(v));
                         }
                     }
                 }
                 if let Some(val_str) = raw_val {
-                    let list = registry().lock().unwrap();
-                    if let Some(entry) = list.iter().find(|e| e.name == target) {
-                        match &entry.kind {
-                            TweakKind::Int(atom) => {
-                                if let Ok(v) = val_str.parse::<i64>() {
-                                    atom.store(v, Ordering::Relaxed);
-                                }
-                            }
-                            TweakKind::Str(m) => {
-                                let decoded = val_str.replace("%20", " ").replace('+', " ");
-                                *m.lock().unwrap() = decoded;
-                            }
-                            TweakKind::Vec(m) => {
-                                let decoded = val_str.replace("%2C", ",").replace("%20", " ");
-                                let parsed: Vec<i64> = decoded
-                                    .split(',')
-                                    .filter_map(|s| s.trim().parse::<i64>().ok())
-                                    .collect();
-                                *m.lock().unwrap() = parsed;
-                            }
-                        }
-                    }
+                    apply_tweak_value(&target, &val_str);
                 }
                 let _ = request.respond(tiny_http::Response::from_string("ok"));
                 continue;
             }
 
-            // 2. Render HTML page with live sliders & text inputs
-            let list = registry().lock().unwrap();
-            let mut rows = String::new();
-            for entry in list.iter() {
-                match &entry.kind {
-                    TweakKind::Int(atom) => {
-                        let v = atom.load(Ordering::Relaxed);
-                        let min = (v - 100).min(0);
-                        let max = (v + 200).max(100);
-                        rows.push_str(&format!(
-                            r#"<div class="card">
-                                <div class="row">
-                                    <label for="num_{name}"><b>{name}</b></label>
-                                    <input id="num_{name}" type="number" value="{v}"
-                                        oninput="document.getElementById('rng_{name}').value=this.value; fetch('/set?name={name}&val='+this.value)">
-                                </div>
-                                <input id="rng_{name}" type="range" min="{min}" max="{max}" value="{v}"
-                                    oninput="document.getElementById('num_{name}').value=this.value; fetch('/set?name={name}&val='+this.value)">
-                            </div>"#,
-                            name = entry.name,
-                            v = v,
-                            min = min,
-                            max = max
-                        ));
-                    }
-                    TweakKind::Str(m) => {
-                        let s = m.lock().unwrap().clone();
-                        rows.push_str(&format!(
-                            r#"<div class="card">
-                                <div class="row">
-                                    <label for="txt_{name}"><b>{name}</b></label>
-                                    <input id="txt_{name}" type="text" value="{s}"
-                                        oninput="fetch('/set?name={name}&val='+encodeURIComponent(this.value))">
-                                </div>
-                            </div>"#,
-                            name = entry.name,
-                            s = s
-                        ));
-                    }
-                    TweakKind::Vec(m) => {
-                        let v = m.lock().unwrap().clone();
-                        let s: Vec<String> = v.iter().map(|x| x.to_string()).collect();
-                        let joined = s.join(", ");
-                        rows.push_str(&format!(
-                            r#"<div class="card">
-                                <div class="row">
-                                    <label for="vec_{name}"><b>{name}</b></label>
-                                    <input id="vec_{name}" type="text" value="{joined}"
-                                        oninput="fetch('/set?name={name}&val='+encodeURIComponent(this.value))">
-                                </div>
-                            </div>"#,
-                            name = entry.name,
-                            joined = joined
-                        ));
-                    }
-                }
-            }
-            if rows.is_empty() {
-                rows.push_str(
-                    "<p>No <code>tweak</code> variables found in the current program.</p>",
-                );
+            if url == "/api/tweaks" {
+                let json = tweaks_as_json();
+                let header = tiny_http::Header::from_bytes(
+                    &b"Content-Type"[..],
+                    &b"application/json; charset=utf-8"[..],
+                )
+                .unwrap();
+                let _ = request.respond(tiny_http::Response::from_string(json).with_header(header));
+                continue;
             }
 
-            let html = format!(
-                r#"<!DOCTYPE html><html><head><meta charset="utf-8"><title>Striv Tweaks</title>
-                <style>
-                    body {{ font-family: system-ui, sans-serif; background: #14161a; color: #f0f0f0; max-width: 500px; margin: 40px auto; padding: 0 20px; }}
-                    h2 {{ color: #61afef; }}
-                    .card {{ background: #1e222a; padding: 16px; border-radius: 8px; margin-bottom: 12px; }}
-                    .row {{ display: flex; justify-content: space-between; align-items: center; }}
-                    input[type=number], input[type=text] {{ width: 120px; background: #14161a; color: #f0f0f0; border: 1px solid #3a3f4b; border-radius: 4px; padding: 4px 8px; }}
-                    input[type=range] {{ width: 100%; margin-top: 10px; accent-color: #61afef; }}
-                </style></head>
-                <body><h2>Striv Live-Tweaks</h2>{rows}</body></html>"#
-            );
             let header = tiny_http::Header::from_bytes(
                 &b"Content-Type"[..],
                 &b"text/html; charset=utf-8"[..],
             )
             .unwrap();
-            let _ = request.respond(tiny_http::Response::from_string(html).with_header(header));
+            let _ = request.respond(
+                tiny_http::Response::from_string(TWEAK_DASHBOARD_HTML).with_header(header),
+            );
         }
     });
 }
