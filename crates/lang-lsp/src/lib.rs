@@ -624,6 +624,8 @@ impl LanguageServer for StrivLsp {
             "test",
             "sync",
             "rpc",
+            "open",
+            "extend",
         ];
         for kw in keywords_with_space {
             items.push(CompletionItem {

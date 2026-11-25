@@ -205,7 +205,7 @@ pub fn emit_crate_bridge(apis: &[CrateApi]) -> (String, SyncSummary) {
             }
 
             let args_joined = call_args.join(", ");
-            let raw_call_expr = match (&m.struct_name, m.receiver) {
+            let call_expr = match (&m.struct_name, m.receiver) {
                 (Some(s), Some(is_mut)) => {
                     let vault = format!("VAULT_{}_{}", cr.to_uppercase(), s.to_uppercase());
                     let key_ty = format!("AutoKey_{}_{}", cr, s);

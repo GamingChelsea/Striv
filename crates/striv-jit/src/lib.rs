@@ -640,7 +640,12 @@ impl JitCompiler {
         for e in &prog.enums {
             enum_defs.insert(e.name.clone(), e.clone());
             for (idx, v) in e.variants.iter().enumerate() {
-                user_enums.insert(format!("{}__{}", e.name, v.name), idx as i64);
+                let val = if e.is_open {
+                    striv_syntax::fnv1a_64(&format!("{}::{}", e.name, v.name))
+                } else {
+                    idx as i64
+                };
+                user_enums.insert(format!("{}__{}", e.name, v.name), val);
             }
         }
         if !prog.consts.is_empty() {

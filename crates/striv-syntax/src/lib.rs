@@ -23,6 +23,8 @@ pub struct EnumVariant {
 #[derive(Debug, Clone)]
 pub struct EnumDef {
     pub name: String,
+    pub is_open: bool,
+    pub is_extend: bool,
     pub variants: Vec<EnumVariant>,
 }
 
@@ -328,6 +330,10 @@ pub enum Token {
     Sync,
     #[token("rpc")]
     Rpc,
+    #[token("open")]
+    Open,
+    #[token("extend")]
+    Extend,
     #[token("Ok")]
     OkKw,
     #[token("Err")]
@@ -458,6 +464,8 @@ impl Token {
             Token::Test => "`test`".to_string(),
             Token::Sync => "`sync`".to_string(),
             Token::Rpc => "`rpc`".to_string(),
+            Token::Open => "`open`".to_string(),
+            Token::Extend => "`extend`".to_string(),
             Token::OkKw => "`Ok`".to_string(),
             Token::ErrKw => "`Err`".to_string(),
             Token::SomeKw => "`Some`".to_string(),
@@ -629,6 +637,19 @@ impl Parser {
                     tweaks.push((t_name, val));
                 }
                 Token::Enum => enums.push(self.parse_enum()),
+                Token::Open => {
+                    self.next();
+                    let mut edef = self.parse_enum();
+                    edef.is_open = true;
+                    enums.push(edef);
+                }
+                Token::Extend => {
+                    self.next();
+                    let mut edef = self.parse_enum();
+                    edef.is_open = true;
+                    edef.is_extend = true;
+                    enums.push(edef);
+                }
                 Token::Struct => structs.push(self.parse_struct()),
                 Token::Impl => {
                     self.next(); // consume `impl`
@@ -713,7 +734,12 @@ impl Parser {
             }
         }
         self.expect(Token::RBrace);
-        EnumDef { name, variants }
+        EnumDef {
+            name,
+            is_open: false,
+            is_extend: false,
+            variants,
+        }
     }
 
     fn parse_struct(&mut self) -> StructDef {
@@ -1802,6 +1828,7 @@ pub fn load_program_with_imports(entry_path: &std::path::Path) -> Result<Program
     };
 
     load_recursive(entry_path, &mut visited, &mut combined)?;
+    merge_open_enums(&mut combined);
     expand_rpc_functions(&mut combined);
     monomorphize::monomorphize_program(&mut combined);
     Ok(combined)
@@ -2014,4 +2041,50 @@ pub fn expand_rpc_functions(prog: &mut Program) {
         ret_type: Some("int".into()),
         body: disp_body,
     });
+}
+
+pub fn fnv1a_64(s: &str) -> i64 {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for b in s.bytes() {
+        hash ^= b as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    ((hash & 0x7FFF_FFFF_FFFF_FFFF).max(1)) as i64
+}
+
+pub fn merge_open_enums(prog: &mut Program) {
+    let mut extensions = Vec::new();
+    let mut base_enums = Vec::new();
+
+    for e in prog.enums.drain(..) {
+        if e.is_extend {
+            extensions.push(e);
+        } else {
+            base_enums.push(e);
+        }
+    }
+
+    for ext in extensions {
+        let target = base_enums
+            .iter_mut()
+            .find(|b| b.name == ext.name)
+            .unwrap_or_else(|| {
+                panic!(
+                    "`extend enum {}` gefunden, aber Basis-Enum fehlt!",
+                    ext.name
+                )
+            });
+        assert!(
+            target.is_open,
+            "Fehler: `enum {}` ist nicht als `open enum` markiert und darf nicht erweitert werden!",
+            ext.name
+        );
+        for v in ext.variants {
+            if !target.variants.iter().any(|existing| existing.name == v.name) {
+                target.variants.push(v);
+            }
+        }
+    }
+
+    prog.enums = base_enums;
 }
