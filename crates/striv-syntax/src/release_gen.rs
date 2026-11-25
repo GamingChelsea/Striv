@@ -49,6 +49,36 @@ pub fn transpile_to_rust_with_consts(
         out.push('\n');
     }
 
+    if !prog.extern_fns.is_empty() {
+        let mut by_lib: HashMap<&str, Vec<&crate::ExternFn>> = HashMap::new();
+        for ext in &prog.extern_fns {
+            by_lib.entry(ext.lib.as_str()).or_default().push(ext);
+        }
+        for (lib, fns) in by_lib {
+            let link_name = lib
+                .strip_suffix(".dll")
+                .or_else(|| lib.strip_suffix(".so"))
+                .or_else(|| lib.strip_suffix(".dylib"))
+                .unwrap_or(lib);
+            let link_name = link_name.strip_prefix("lib").unwrap_or(link_name);
+            out.push_str(&format!("#[link(name = \"{}\")]\nunsafe extern \"C\" {{\n", link_name));
+            for ext in fns {
+                let params: Vec<String> = ext
+                    .params
+                    .iter()
+                    .map(|(p, t)| format!("{}: {}", p, map_type(t)))
+                    .collect();
+                let ret = ext
+                    .ret_type
+                    .as_ref()
+                    .map(|r| format!(" -> {}", map_type(r)))
+                    .unwrap_or_default();
+                out.push_str(&format!("    fn {}({}){};\n", ext.name, params.join(", "), ret));
+            }
+            out.push_str("}\n\n");
+        }
+    }
+
     // 2. User-defined enums -> constant i64 modules
     for e in &prog.enums {
         out.push_str(&format!("pub mod {} {{\n", e.name));
@@ -105,6 +135,7 @@ fn map_type(ty: &str) -> String {
         "int" => "i64".to_string(),
         "float" => "f64".to_string(),
         "bool" => "bool".to_string(),
+        "cstr" => "*const u8".to_string(),
         "String" => "String".to_string(),
         "Vec" => "Vec<i64>".to_string(),
         "Result" => "Result<i64, i64>".to_string(),

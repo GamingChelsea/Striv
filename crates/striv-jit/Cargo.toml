@@ -10,3 +10,5 @@ cranelift.workspace = true
 cranelift-jit.workspace = true
 cranelift-module.workspace = true
 cranelift-native.workspace = true
+libloading.workspace = true
+parking_lot.workspace = true

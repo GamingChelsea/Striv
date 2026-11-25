@@ -131,6 +131,39 @@ pub fn format_program_with_options(
         out.push('\n');
     }
 
+    for ext in &prog.extern_fns {
+        let params: Vec<String> = ext
+            .params
+            .iter()
+            .map(|(p, t)| format!("{}: {}", p, t))
+            .collect();
+        let ret = ext
+            .ret_type
+            .as_ref()
+            .map(|r| format!(" -> {}", r))
+            .unwrap_or_default();
+        if dialect == crate::Dialect::Odin {
+            out.push_str(&format!(
+                "foreign \"{}\" {} :: proc({}){}\n",
+                ext.lib,
+                ext.name,
+                params.join(", "),
+                ret
+            ));
+        } else {
+            out.push_str(&format!(
+                "extern \"{}\" fn {}({}){}\n",
+                ext.lib,
+                ext.name,
+                params.join(", "),
+                ret
+            ));
+        }
+    }
+    if !prog.extern_fns.is_empty() {
+        out.push('\n');
+    }
+
     for e in &prog.enums {
         let open_p = if e.is_extend {
             "extend "

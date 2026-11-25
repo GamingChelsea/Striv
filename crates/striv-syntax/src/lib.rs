@@ -101,12 +101,21 @@ pub struct UnitDef {
 }
 
 #[derive(Debug, Clone)]
+pub struct ExternFn {
+    pub lib: String,
+    pub name: String,
+    pub params: Vec<(String, String)>,
+    pub ret_type: Option<String>,
+}
+
+#[derive(Debug, Clone)]
 pub struct Program {
     pub imports: Vec<String>,
     pub tweaks: Vec<(String, TweakVal)>,
     pub consts: Vec<(String, Expr)>,
     pub units: Vec<UnitDef>,
     pub rust_blocks: Vec<String>,
+    pub extern_fns: Vec<ExternFn>,
     pub enums: Vec<EnumDef>,
     pub structs: Vec<StructDef>,
     pub functions: Vec<Function>,
@@ -336,6 +345,10 @@ pub enum Op {
 pub enum Token {
     #[token("fn")]
     Fn,
+    #[token("extern")]
+    Extern,
+    #[token("foreign")]
+    Foreign,
     #[token("const")]
     Const,
     #[token("true")]
@@ -521,6 +534,8 @@ impl Token {
     pub fn display_name(&self) -> String {
         match self {
             Token::Fn => "`fn`".to_string(),
+            Token::Extern => "`extern`".to_string(),
+            Token::Foreign => "`foreign`".to_string(),
             Token::Const => "`const`".to_string(),
             Token::True => "`true`".to_string(),
             Token::False => "`false`".to_string(),
@@ -693,6 +708,7 @@ impl Parser {
         let mut consts = Vec::new();
         let mut units = Vec::new();
         let mut rust_blocks = Vec::new();
+        let mut extern_fns = Vec::new();
         let mut enums = Vec::new();
         let mut structs = Vec::new();
         let mut functions = Vec::new();
@@ -870,6 +886,26 @@ impl Parser {
                         formula,
                     });
                 }
+                Token::Extern | Token::Foreign => {
+                    self.next();
+                    if let Some(Token::Ident(kw)) = self.peek() {
+                        if kw == "import" {
+                            self.next();
+                        }
+                    }
+                    let Some(Token::Str(lib_name)) = self.next() else {
+                        self.error("Expected library path string after `extern`/`foreign`");
+                    };
+                    if self.peek() == Some(&Token::LBrace) {
+                        self.next();
+                        while self.peek() != Some(&Token::RBrace) && self.peek().is_some() {
+                            extern_fns.push(self.parse_extern_fn_decl(&lib_name));
+                        }
+                        self.expect(Token::RBrace);
+                    } else {
+                        extern_fns.push(self.parse_extern_fn_decl(&lib_name));
+                    }
+                }
                 t => panic!(
                     "Expected `tweak`, `const`, `struct`, `impl`, or `fn`, found: {:?}",
                     t
@@ -882,10 +918,54 @@ impl Parser {
             consts,
             units,
             rust_blocks,
+            extern_fns,
             enums,
             structs,
             functions,
             tests,
+        }
+    }
+
+    fn parse_extern_fn_decl(&mut self, lib: &str) -> ExternFn {
+        let name = if self.peek() == Some(&Token::Fn) {
+            self.next();
+            let Some(Token::Ident(n)) = self.next() else {
+                self.error("Expected function name after `fn`");
+            };
+            n
+        } else {
+            let Some(Token::Ident(n)) = self.next() else {
+                self.error("Expected extern function name");
+            };
+            self.expect(Token::ColonColon);
+            self.expect(Token::Proc);
+            n
+        };
+        self.expect(Token::LParen);
+        let mut params = Vec::new();
+        while self.peek() != Some(&Token::RParen) {
+            let Some(Token::Ident(p_name)) = self.next() else {
+                self.error("Expected parameter name");
+            };
+            self.expect(Token::Colon);
+            let ty_name = self.parse_type_name();
+            params.push((p_name, ty_name));
+            if self.peek() == Some(&Token::Comma) {
+                self.next();
+            }
+        }
+        self.expect(Token::RParen);
+        let ret_type = if self.peek() == Some(&Token::Arrow) {
+            self.next();
+            Some(self.parse_type_name())
+        } else {
+            None
+        };
+        ExternFn {
+            lib: lib.to_string(),
+            name,
+            params,
+            ret_type,
         }
     }
 
@@ -2174,6 +2254,7 @@ pub fn load_program_with_imports(entry_path: &std::path::Path) -> Result<Program
         consts: Vec::new(),
         units: Vec::new(),
         rust_blocks: Vec::new(),
+        extern_fns: Vec::new(),
         enums: Vec::new(),
         structs: Vec::new(),
         functions: Vec::new(),
@@ -2224,6 +2305,7 @@ fn load_recursive(
     out.consts.extend(prog.consts);
     out.units.extend(prog.units);
     out.rust_blocks.extend(prog.rust_blocks);
+    out.extern_fns.extend(prog.extern_fns);
     out.enums.extend(prog.enums);
     out.structs.extend(prog.structs);
     out.functions.extend(prog.functions);

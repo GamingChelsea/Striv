@@ -5,6 +5,40 @@ use cranelift_module::{Linkage, Module};
 use std::collections::HashMap;
 use striv_syntax::{Expr, Op, Program, Stmt, StringPart, StructDef, TweakVal};
 
+static EXTERN_C_LIBS: std::sync::OnceLock<parking_lot::Mutex<Vec<libloading::Library>>> =
+    std::sync::OnceLock::new();
+static EXTERN_C_SYMS: std::sync::OnceLock<parking_lot::Mutex<HashMap<String, usize>>> =
+    std::sync::OnceLock::new();
+
+fn register_extern_c_fn(lib_path: &str, sym_name: &str) {
+    let syms = EXTERN_C_SYMS.get_or_init(|| parking_lot::Mutex::new(HashMap::new()));
+    if syms.lock().contains_key(sym_name) {
+        return;
+    }
+    let lib = unsafe {
+        libloading::Library::new(lib_path).or_else(|e| {
+            if cfg!(windows) && !lib_path.ends_with(".dll") {
+                libloading::Library::new(format!("{}.dll", lib_path))
+            } else {
+                Err(e)
+            }
+        })
+    }
+    .unwrap_or_else(|e| panic!("Failed to load C library '{}': {}", lib_path, e));
+
+    let ptr: usize = unsafe {
+        let sym: libloading::Symbol<*const u8> = lib
+            .get(sym_name.as_bytes())
+            .unwrap_or_else(|e| panic!("Symbol '{}' not found in '{}': {}", sym_name, lib_path, e));
+        *sym as usize
+    };
+    syms.lock().insert(sym_name.to_string(), ptr);
+    EXTERN_C_LIBS
+        .get_or_init(|| parking_lot::Mutex::new(Vec::new()))
+        .lock()
+        .push(lib);
+}
+
 // 1. Rust host functions for printing (integers and structs without derive)
 extern "C" fn host_print_int(val: i64) {
     println!(">> {}", val);
@@ -111,6 +145,7 @@ struct CompileEnv<'a> {
     str_push_str_ref: cranelift::codegen::ir::FuncRef,
     str_print_ref: cranelift::codegen::ir::FuncRef,
     str_free_ref: cranelift::codegen::ir::FuncRef,
+    str_to_cstr_ref: cranelift::codegen::ir::FuncRef,
     tweak_get_str_ref: cranelift::codegen::ir::FuncRef,
     tweak_get_vec_ref: cranelift::codegen::ir::FuncRef,
     set_err_ref: cranelift::codegen::ir::FuncRef,
@@ -138,6 +173,7 @@ struct CompileEnv<'a> {
     bytes_read_f64_ref: cranelift::codegen::ir::FuncRef,
     fn_ret_handles: &'a HashMap<String, String>,
     fn_ret_floats: &'a std::collections::HashSet<String>,
+    fn_ret_i32: &'a std::collections::HashSet<String>,
     sandbox_mode: bool,
     check_gas_ref: cranelift::codegen::ir::FuncRef,
     ecs_set_ref: cranelift::codegen::ir::FuncRef,
@@ -344,6 +380,17 @@ impl JitCompiler {
             let sym = format!("striv_std_{}", s_name.replace("::", "__"));
             builder.symbol(&sym, ptr);
         }
+        builder.symbol(
+            "striv_str_to_cstr",
+            lang_runtime::striv_str_to_cstr as *const u8,
+        );
+        builder.symbol_lookup_fn(Box::new(|name| {
+            EXTERN_C_SYMS
+                .get()?
+                .lock()
+                .get(name)
+                .map(|&ptr| ptr as *const u8)
+        }));
 
         Self {
             module: JITModule::new(builder),
@@ -363,6 +410,9 @@ impl JitCompiler {
     }
 
     pub fn compile_program(&mut self, prog: &Program) -> *const u8 {
+        if self.sandbox_mode && !prog.extern_fns.is_empty() {
+            panic!("Sandbox-Verstoß: Externe C-Bibliotheken sind in Mods verboten!");
+        }
         let unit_names: std::collections::HashSet<&str> =
             prog.units.iter().map(|u| u.name.as_str()).collect();
         let mut sync_layouts: HashMap<String, usize> = HashMap::new();
@@ -805,8 +855,47 @@ impl JitCompiler {
         }
 
         // Pre-declare external & std collection functions once per module instead of per-function
+        let mut sig_int_to_int = self.module.make_signature();
+        sig_int_to_int.params.push(AbiParam::new(int_ty));
+        sig_int_to_int.returns.push(AbiParam::new(int_ty));
+        let str_to_cstr_id = self
+            .module
+            .declare_function("striv_str_to_cstr", Linkage::Import, &sig_int_to_int)
+            .unwrap();
+
+        let mut fn_ret_i32: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut predeclared_externs: Vec<(String, cranelift_module::FuncId, Vec<(String, bool)>)> =
             Vec::new();
+        for ext in &prog.extern_fns {
+            register_extern_c_fn(&ext.lib, &ext.name);
+            if matches!(ext.ret_type.as_deref(), Some("float" | "f64" | "f32")) {
+                fn_ret_floats.insert(ext.name.clone());
+            } else if ext.ret_type.as_deref() == Some("i32") {
+                fn_ret_i32.insert(ext.name.clone());
+            }
+            let mut sig_c = self.module.make_signature();
+            let mut param_types = Vec::with_capacity(ext.params.len());
+            for (_, p_ty) in &ext.params {
+                let abi_ty = match p_ty.as_str() {
+                    "f32" => types::F32,
+                    "float" | "f64" => types::F64,
+                    _ => int_ty,
+                };
+                sig_c.params.push(AbiParam::new(abi_ty));
+                param_types.push((p_ty.clone(), false));
+            }
+            let ret_ty = match ext.ret_type.as_deref() {
+                Some("f32") => types::F32,
+                Some("float" | "f64") => types::F64,
+                _ => int_ty,
+            };
+            sig_c.returns.push(AbiParam::new(ret_ty));
+            let ext_id = self
+                .module
+                .declare_function(&ext.name, Linkage::Import, &sig_c)
+                .unwrap();
+            predeclared_externs.push((ext.name.clone(), ext_id, param_types));
+        }
         for &(striv_name, c_sym, _, sig_str) in
             lang_runtime::generated_bridge::exported_symbols()
         {
@@ -997,6 +1086,7 @@ impl JitCompiler {
                         .declare_func_in_func(str_push_str_id, builder.func),
                     str_print_ref: self.module.declare_func_in_func(str_print_id, builder.func),
                     str_free_ref: self.module.declare_func_in_func(str_free_id, builder.func),
+                    str_to_cstr_ref: self.module.declare_func_in_func(str_to_cstr_id, builder.func),
                     tweak_get_str_ref: self
                         .module
                         .declare_func_in_func(tweak_get_str_id, builder.func),
@@ -1052,6 +1142,7 @@ impl JitCompiler {
                         .declare_func_in_func(bytes_read_f64_id, builder.func),
                     fn_ret_handles: &fn_ret_handles,
                     fn_ret_floats: &fn_ret_floats,
+                    fn_ret_i32: &fn_ret_i32,
                     sandbox_mode: self.sandbox_mode,
                     check_gas_ref: self.module.declare_func_in_func(check_gas_id, builder.func),
                     ecs_set_ref: self.module.declare_func_in_func(ecs_set_id, builder.func),
@@ -1456,8 +1547,19 @@ fn is_float_expr(expr: &Expr, vars: &HashMap<String, VarInfo>, env: &CompileEnv)
             | Some(VarInfo::StructPtr { struct_name, .. }) => {
                 field_is_float(env.structs.get(struct_name).unwrap(), field)
             }
+            Some(VarInfo::Tuple { elem_is_float, .. }) => tuple_field_index(field)
+                .and_then(|idx| elem_is_float.get(idx).copied())
+                .unwrap_or(false),
             _ => false,
         },
+        Expr::TupleIndex { tuple, idx } => {
+            if let Expr::Var(v_name) = &**tuple {
+                if let Some(VarInfo::Tuple { elem_is_float, .. }) = vars.get(v_name) {
+                    return elem_is_float.get(*idx).copied().unwrap_or(false);
+                }
+            }
+            false
+        }
         Expr::BinOp { left, op, right } => {
             !matches!(op, Op::Lt | Op::Gt | Op::Eq)
                 && (is_float_expr(left, vars, env) || is_float_expr(right, vars, env))
@@ -1569,7 +1671,31 @@ fn compile_call(
     let mut mut_borrowed = Vec::new();
 
     for (i, arg) in args.iter().enumerate() {
-        let (_expected_ty, expects_mut) = &param_meta[i];
+        let (expected_ty, expects_mut) = &param_meta[i];
+        if expected_ty == "cstr" {
+            if let Expr::StrInterp(parts) = arg {
+                if parts.len() == 1 {
+                    if let StringPart::Literal(text) = &parts[0] {
+                        let mut bytes = text.as_bytes().to_vec();
+                        bytes.push(0);
+                        let boxed: Box<[u8]> = bytes.into_boxed_slice();
+                        let raw_ptr = boxed.as_ptr() as i64;
+                        env.literals.push(boxed);
+                        arg_vals.push(builder.ins().iconst(env.int_ty, raw_ptr));
+                        continue;
+                    }
+                }
+            }
+            let str_val = compile_expr(arg, builder, vars, env);
+            let c = builder.ins().call(env.str_to_cstr_ref, &[str_val]);
+            arg_vals.push(builder.inst_results(c)[0]);
+            continue;
+        }
+        if expected_ty == "f32" {
+            let val = to_f64(compile_expr(arg, builder, vars, env), builder);
+            arg_vals.push(builder.ins().fdemote(types::F32, val));
+            continue;
+        }
         if let Expr::Var(v_name) = arg {
             match vars.get(v_name) {
                 Some(VarInfo::Struct { slot, is_mut, .. }) => {
@@ -1629,7 +1755,15 @@ fn compile_call(
     if let Some(slot) = ret_slot {
         builder.ins().stack_addr(env.int_ty, slot, 0)
     } else {
-        builder.inst_results(call)[0]
+        let res = builder.inst_results(call)[0];
+        if builder.func.dfg.value_type(res) == types::F32 {
+            builder.ins().fpromote(types::F64, res)
+        } else if env.fn_ret_i32.contains(name) {
+            let r32 = builder.ins().ireduce(types::I32, res);
+            builder.ins().sextend(env.int_ty, r32)
+        } else {
+            res
+        }
     }
 }
 
@@ -2000,7 +2134,36 @@ fn compile_stmt(
                         );
                     }
                 }
-            } else {
+            } else if let Expr::Var(v_name) = value {
+                if let Some(VarInfo::Tuple {
+                    slot,
+                    elem_is_float,
+                    ..
+                }) = vars.get(v_name).cloned()
+                {
+                    for (i, (n, is_mut)) in names.iter().enumerate() {
+                        let is_f = *elem_is_float.get(i).unwrap_or(&false);
+                        let ty = if is_f { types::F64 } else { env.int_ty };
+                        let val = builder.ins().stack_load(env.int_ty, ty, slot, (i * 8) as i32);
+                        let var = builder.declare_var(ty);
+                        builder.def_var(var, val);
+                        vars.insert(
+                            n.clone(),
+                            if is_f {
+                                VarInfo::Float {
+                                    var,
+                                    is_mut: *is_mut,
+                                }
+                            } else {
+                                VarInfo::Int {
+                                    var,
+                                    is_mut: *is_mut,
+                                }
+                            },
+                        );
+                    }
+                    return false;
+                }
                 let base_ptr = compile_expr(value, builder, vars, env);
                 for (i, (n, is_mut)) in names.iter().enumerate() {
                     let val = builder.ins().load(
@@ -2122,10 +2285,18 @@ fn compile_stmt(
                     let zero = builder.ins().iconst(env.int_ty, 0);
                     builder.ins().store(MemFlagsData::new(), zero, base, 0);
                 }
+                let def_cloned = def.clone();
+                for (df_name, df_expr) in &def_cloned.default_fields {
+                    let dv = compile_expr(df_expr, builder, vars, env);
+                    let off = field_offset(&def_cloned, df_name);
+                    let f_ty = field_type(&def_cloned, df_name);
+                    let base = builder.ins().stack_addr(env.int_ty, slot, 0);
+                    store_struct_field(builder, dv, base, off, f_ty);
+                }
                 for (f_name, f_expr) in fields {
                     let val = compile_expr(f_expr, builder, vars, env);
-                    let offset = field_offset(def, f_name);
-                    let f_ty = field_type(def, f_name);
+                    let offset = field_offset(&def_cloned, f_name);
+                    let f_ty = field_type(&def_cloned, f_name);
                     let base = builder.ins().stack_addr(env.int_ty, slot, 0);
                     store_struct_field(builder, val, base, offset, f_ty);
                 }
@@ -4317,6 +4488,7 @@ pub fn eval_comptime_consts(prog: &Program) -> HashMap<String, i64> {
             consts: Vec::new(),
             units: Vec::new(),
             rust_blocks: Vec::new(),
+            extern_fns: Vec::new(),
             enums: prog.enums.clone(),
             structs: prog.structs.clone(),
             functions: funcs,
@@ -4366,5 +4538,337 @@ fn main() -> int {
         let prog = striv_syntax::Parser::new(src).parse_program();
         let mut jit = JitCompiler::new_sandboxed();
         let _ = jit.compile_program(&prog);
+    }
+
+    #[test]
+    fn test_extern_c_msvcrt_rust_and_odin() {
+        let rust_src = r#"
+extern "msvcrt.dll" fn abs(x: i32) -> i32
+extern "msvcrt.dll" fn strlen(s: cstr) -> int
+
+fn main() -> int {
+    let a = abs(-42)
+    let b = strlen("Hallo Striv")
+    return a * 100 + b
+}
+"#;
+        let prog = striv_syntax::Parser::new(rust_src).parse_program();
+        let mut jit = JitCompiler::new();
+        let ptr = jit.compile_program(&prog);
+        let f: fn() -> i64 = unsafe { std::mem::transmute(ptr) };
+        assert_eq!(f(), 4211);
+
+        let odin_src = r#"
+foreign "msvcrt.dll" {
+    abs :: proc(x: i32) -> i32
+    strlen :: proc(s: cstr) -> int
+}
+
+main :: proc() -> int {
+    return abs(-7) + strlen("Odin")
+}
+"#;
+        let prog_odin =
+            striv_syntax::Parser::new_with_dialect(odin_src, striv_syntax::Dialect::Odin)
+                .parse_program();
+        let mut jit_odin = JitCompiler::new();
+        let ptr_odin = jit_odin.compile_program(&prog_odin);
+        let f_odin: fn() -> i64 = unsafe { std::mem::transmute(ptr_odin) };
+        assert_eq!(f_odin(), 11);
+    }
+
+    #[test]
+    fn test_website_documentation_examples_compile() {
+        let rust_examples: &[(&str, &str)] = &[
+            (
+                "overview",
+                r#"
+struct Ship { x: float, hp: int = 100 }
+fn main() -> int {
+    let mut s = Ship { x: 10.0 }
+    s.hp -= 15
+    print("Ship HP: {s.hp}")
+    return 0
+}
+"#,
+            ),
+            (
+                "from_rust",
+                r#"
+struct Counter { hits: int }
+fn worker(shared c: Counter) { lock c { c.hits += 1 } }
+fn main() -> int {
+    shared counter = Counter { hits: 0 }
+    concurrent { spawn worker(counter) }
+    lock counter { assert(counter.hits == 1) }
+    return 0
+}
+"#,
+            ),
+            (
+                "from_odin",
+                r#"
+fn demo() -> float {
+    let pos = (1.0, 2.0, 3.0)
+    defer print("Scope verlassen")
+    return pos.x + pos.y + pos.z
+}
+"#,
+            ),
+            (
+                "basics_vars",
+                r#"
+const MAX_SHIPS = 1024
+tweak SPEED = 12
+fn demo() -> int {
+    let a = 10
+    let mut b: int = 20
+    b += a
+    print("b = {b}")
+    return b
+}
+"#,
+            ),
+            (
+                "basics_loops",
+                r#"
+fn sum_filtered() -> int {
+    let mut items = [10, 20, 30]
+    let mut sum = 0
+    for i in 0..10 {
+        if i == 2 { continue }
+        if i == 7 { break }
+        sum += i
+    }
+    for mut x in items { sum += x }
+    return sum
+}
+"#,
+            ),
+            (
+                "basics_defer_block",
+                r#"
+fn repeat_times(n: int, body: block) {
+    for _i in 0..n { yield }
+}
+fn run() -> int {
+    defer print("2. LIFO-Ende")
+    defer print("1. LIFO-Start")
+    let mut acc = 0
+    repeat_times(5) { acc += 3 }
+    return acc
+}
+"#,
+            ),
+            (
+                "structs_vec2",
+                r#"
+struct Vec2 { x: float, y: float }
+impl Vec2 {
+    fn op_add(self, o: Vec2) -> Vec2 { return Vec2 { x: self.x + o.x, y: self.y + o.y } }
+    fn op_mul(self, s: float) -> Vec2 { return Vec2 { x: self.x * s, y: self.y * s } }
+}
+"#,
+            ),
+            (
+                "structs_tuples",
+                r#"
+fn tuple_demo() -> float {
+    let p = (10.0, 20.0, 30.0)
+    let (mut x, y, _z) = p
+    x += p.z
+    return x + y
+}
+"#,
+            ),
+            (
+                "structs_json",
+                r#"
+struct RocketPart { name: String, thrust: float = 100.0 }
+fn load_part() -> float {
+    let p = RocketPart { name: "Mainsail", thrust: 1500.0 }
+    let txt = p.to_json()
+    let loaded = RocketPart::from_json(txt)
+    return loaded.thrust
+}
+"#,
+            ),
+            (
+                "enums_match",
+                r#"
+enum Shape { Empty, Circle(float), Rect(float, float) }
+fn shape_area(sh: Shape) -> float {
+    match sh {
+        Shape::Empty => { return 0.0 }
+        Shape::Circle(r) => { return 3.0 * r * r }
+        Shape::Rect(w, h) => { return w * h }
+    }
+    return 0.0
+}
+"#,
+            ),
+            (
+                "generics",
+                r#"
+struct Pair<A, B> { first: A, second: B }
+fn clamp<T>(val: T, lo: T, hi: T) -> T {
+    if val < lo { return lo }
+    if val > hi { return hi }
+    return val
+}
+fn test_gen() -> int {
+    let p = Pair { first: 1, second: 2.5 }
+    return clamp(150, 0, p.first)
+}
+"#,
+            ),
+            (
+                "units",
+                r#"
+unit m
+unit s
+unit kg
+unit Velocity = m / s
+unit Accel = m / (s * s)
+unit Force = kg * Accel
+struct RocketStage { dry_mass: kg, fuel_mass: kg, thrust: Force }
+fn calc_delta_v(stage: RocketStage, dt: s) -> Velocity {
+    let total_mass = stage.dry_mass + stage.fuel_mass
+    let acc = stage.thrust / total_mass
+    return acc * dt
+}
+"#,
+            ),
+            (
+                "concurrency_shared",
+                r#"
+struct SharedCounter { hits: int }
+fn inc_shared(shared c: SharedCounter, n: int) {
+    for _i in 0..n { lock c { c.hits = c.hits + 1 } }
+}
+fn run_workers() -> int {
+    shared counter = SharedCounter { hits: 0 }
+    concurrent {
+        spawn inc_shared(counter, 1000)
+        spawn inc_shared(counter, 1000)
+    }
+    let mut out = 0
+    lock counter { out = counter.hits }
+    return out
+}
+"#,
+            ),
+            (
+                "concurrency_par_for",
+                r#"
+struct Particle { x: float, vx: float }
+fn step_particles(dt: float) {
+    let mut parts: Vec<Particle> = []
+    parts.push(Particle { x: 0.0, vx: 2.0 })
+    parallel for mut p in parts { p.x = p.x + p.vx * dt }
+}
+"#,
+            ),
+            (
+                "concurrency_select",
+                r#"
+fn wait_msg() -> int {
+    let ch1 = Channel::new()
+    let ch2 = Channel::new()
+    select {
+        msg = ch1.recv() => { return msg }
+        msg = ch2.recv() => { return msg }
+        timeout(50) => { return -1 }
+    }
+    return 0
+}
+"#,
+            ),
+            (
+                "ecs",
+                r#"
+struct Position { x: float, y: float }
+struct Velocity { vx: float, vy: float }
+fn step(dt: float) {
+    let mut world = Ecs::new()
+    let e = world.spawn()
+    world.set(e, Position { x: 0.0, y: 0.0 })
+    world.set(e, Velocity { vx: 10.0, vy: 0.0 })
+    parallel query (mut pos: Position, vel: Velocity) in world {
+        pos.x = pos.x + vel.vx * dt
+    }
+    query (p: Position) in world { print("x = {p.x}") }
+}
+"#,
+            ),
+            (
+                "networking_sync",
+                r#"
+struct SyncShip { sync x: float, sync shield: f32, local_bob: f32 }
+fn sync_step(mut c: SyncShip, mut s: SyncShip) {
+    c.clear_dirty()
+    c.x = 555.25
+    let delta = c.pack_delta()
+    s.apply_delta(delta)
+}
+"#,
+            ),
+            (
+                "networking_rpc",
+                r#"
+struct RpcWorld { sync hull: int }
+rpc fn repair_hull(mut w: RpcWorld, amount: int) { w.hull = w.hull + amount }
+fn net_demo(mut w: RpcWorld) -> int {
+    let pkt = repair_hull_pack(25)
+    return rpc_dispatch(w, pkt)
+}
+"#,
+            ),
+            (
+                "modding_enums",
+                r#"
+open enum Resource { LiquidFuel, Oxidizer }
+extend enum Resource { Uranium }
+fn check_res() -> int { return Resource::Uranium }
+"#,
+            ),
+            (
+                "interop_c_rust",
+                r#"
+extern "msvcrt.dll" fn abs(x: i32) -> i32
+extern "msvcrt.dll" fn strlen(s: cstr) -> int
+rust { pub struct RustRocket { pub fuel: i64 } }
+rust fn make_rocket(f: int) -> int {
+    crate::box_any_handle(RustRocket { fuel: f })
+}
+"#,
+            ),
+            (
+                "stdlib_test",
+                r#"
+test "String und Mathe" {
+    let raw = "  42  "
+    let t = raw.trim()
+    assert(t.to_int() == 42)
+    assert(sqrt(81.0) == 9.0)
+}
+"#,
+            ),
+        ];
+
+        for (label, src) in rust_examples {
+            let mut prog = striv_syntax::Parser::new(src).parse_program();
+            striv_syntax::units::check_and_erase_units(&mut prog)
+                .unwrap_or_else(|e| panic!("Unit error in '{}': {}", label, e));
+            striv_syntax::merge_open_enums(&mut prog);
+            striv_syntax::expand_rpc_functions(&mut prog);
+            striv_syntax::monomorphize::monomorphize_program(&mut prog);
+            let mut jit = JitCompiler::new();
+            if prog.tests.is_empty() {
+                let _ = jit.compile_program(&prog);
+            } else {
+                let _ = jit.compile_tests(&prog);
+            }
+        }
     }
 }

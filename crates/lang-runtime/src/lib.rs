@@ -534,6 +534,21 @@ pub extern "C" fn striv_str_free(s_ptr: *mut String) {
     }
 }
 
+/// Ensures a heap `String` is null-terminated in-place and returns a `*const u8` C-string pointer.
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_str_to_cstr(s_ptr: *mut String) -> *const u8 {
+    if s_ptr.is_null() {
+        return b"\0".as_ptr();
+    }
+    let s = unsafe { &mut *s_ptr };
+    s.reserve(1);
+    unsafe {
+        let end = s.as_mut_ptr().add(s.len());
+        *end = 0;
+    }
+    s.as_ptr()
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn striv_vec_new() -> *mut Vec<i64> {
     Box::into_raw(Box::new(Vec::new()))

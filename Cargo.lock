@@ -1339,6 +1339,8 @@ dependencies = [
  "cranelift-module",
  "cranelift-native",
  "lang-runtime",
+ "libloading",
+ "parking_lot",
  "striv-syntax",
 ]
 
