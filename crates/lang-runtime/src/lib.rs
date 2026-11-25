@@ -420,6 +420,27 @@ pub fn take_assert_failed() -> bool {
     ASSERT_FAILED.with(|f| f.replace(false))
 }
 
+pub fn block_on_async<F: std::future::Future>(f: F) -> F::Output {
+    use std::pin::pin;
+    use std::sync::Arc;
+    use std::task::{Context, Poll, Wake};
+    struct ThreadWaker(std::thread::Thread);
+    impl Wake for ThreadWaker {
+        fn wake(self: Arc<Self>) {
+            self.0.unpark();
+        }
+    }
+    let waker = Arc::new(ThreadWaker(std::thread::current())).into();
+    let mut cx = Context::from_waker(&waker);
+    let mut f = pin!(f);
+    loop {
+        match f.as_mut().poll(&mut cx) {
+            Poll::Ready(val) => return val,
+            Poll::Pending => std::thread::park(),
+        }
+    }
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn striv_sin(x: f64) -> f64 {
     x.sin()

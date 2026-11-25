@@ -174,6 +174,12 @@ pub fn emit_crate_bridge(apis: &[CrateApi]) -> (String, SyncSummary) {
                         ));
                         call_args.push(format!("&v_arg{i}"));
                     }
+                    ArgKind::U8Slice => {
+                        out.push_str(&format!(
+                            "    let b_arg{i}: &[u8] = if arg{i} == 0 {{ &[] }} else {{ unsafe {{ (*(arg{i} as *const Vec<u8>)).as_slice() }} }};\n"
+                        ));
+                        call_args.push(format!("b_arg{i}"));
+                    }
                     ArgKind::Enum(en_name) => {
                         call_args.push(format!(
                             "auto_enum_{}_{}(arg{})",
@@ -199,7 +205,7 @@ pub fn emit_crate_bridge(apis: &[CrateApi]) -> (String, SyncSummary) {
             }
 
             let args_joined = call_args.join(", ");
-            let call_expr = match (&m.struct_name, m.receiver) {
+            let raw_call_expr = match (&m.struct_name, m.receiver) {
                 (Some(s), Some(is_mut)) => {
                     let vault = format!("VAULT_{}_{}", cr.to_uppercase(), s.to_uppercase());
                     let key_ty = format!("AutoKey_{}_{}", cr, s);

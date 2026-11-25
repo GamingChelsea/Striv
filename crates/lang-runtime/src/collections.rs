@@ -741,6 +741,12 @@ pub extern "C" fn striv_svec_byte_len(v_ptr: *const RawStructVec) -> i64 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn striv_svec_to_bytes(v_ptr: *const RawStructVec) -> *mut Vec<u8> {
+    let data = unsafe { (*v_ptr).data.clone() };
+    Box::into_raw(Box::new(data))
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn striv_bytes_write_u32(p: *mut Vec<u8>, v: i64) -> i64 {
     unsafe {
         (*p).extend_from_slice(&(v as u32).to_le_bytes());

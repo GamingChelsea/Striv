@@ -21,6 +21,7 @@ pub enum ArgKind {
     Float(String),           // f32, f64
     StrRef,                  // &str
     U32Slice,                // &[u32]
+    U8Slice,                 // &[u8]
     Enum(String),            // unit enum in same crate
     Handle(String),          // struct in same crate (by value or &T / &mut T)
     HandleRef(String, bool), // (&T, is_mut)
@@ -42,6 +43,7 @@ pub struct MethodInfo {
     pub struct_name: Option<String>, // None for free functions
     pub name: String,
     pub receiver: Option<bool>, // None = assoc/free, Some(false) = &self, Some(true) = &mut self
+    pub is_async: bool,
     pub args: Vec<ArgKind>,
     pub arg_metas: Vec<(String, String)>,
     pub ret: RetKind,
@@ -344,6 +346,7 @@ pub fn scan_crate_api(crate_name: &str, lib_rs: &Path) -> CrateApi {
             struct_name: Some(s_name.clone()),
             name: "default".to_string(),
             receiver: None,
+            is_async: false,
             args: Vec::new(),
             arg_metas: Vec::new(),
             ret: RetKind::Handle(s_name.clone()),
@@ -381,6 +384,7 @@ pub fn scan_crate_api(crate_name: &str, lib_rs: &Path) -> CrateApi {
                             struct_name: Some(struct_name.clone()),
                             name: "default".to_string(),
                             receiver: None,
+            is_async: false,
                             args: Vec::new(),
                             arg_metas: Vec::new(),
                             ret: RetKind::Handle(struct_name.clone()),
@@ -488,6 +492,7 @@ fn striv_type_label(kind: &ArgKind) -> String {
         ArgKind::Float(_) => "float".to_string(),
         ArgKind::StrRef => "String".to_string(),
         ArgKind::U32Slice => "Vec".to_string(),
+        ArgKind::U8Slice => "Bytes".to_string(),
         ArgKind::Enum(e) => e.clone(),
         ArgKind::Handle(h) | ArgKind::HandleRef(h, _) => h.clone(),
     }
@@ -537,6 +542,7 @@ fn parse_sig(
         struct_name: struct_name.map(|s| s.to_string()),
         name: sig.ident.to_string(),
         receiver,
+        is_async: sig.asyncness.is_some(),
         args,
         arg_metas,
         ret,
@@ -574,6 +580,9 @@ fn classify_arg(ty: &Type, enums: &[String], structs: &[String]) -> Option<ArgKi
             if let Type::Slice(sl) = &*r.elem {
                 if type_ident(&sl.elem).as_deref() == Some("u32") && r.mutability.is_none() {
                     return Some(ArgKind::U32Slice);
+                }
+                if type_ident(&sl.elem).as_deref() == Some("u8") && r.mutability.is_none() {
+                    return Some(ArgKind::U8Slice);
                 }
             }
             None
