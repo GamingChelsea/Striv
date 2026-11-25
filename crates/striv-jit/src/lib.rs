@@ -142,6 +142,9 @@ struct CompileEnv<'a> {
     check_gas_ref: cranelift::codegen::ir::FuncRef,
     ecs_set_ref: cranelift::codegen::ir::FuncRef,
     ecs_query_run_ref: cranelift::codegen::ir::FuncRef,
+    to_json_ref: cranelift::codegen::ir::FuncRef,
+    from_json_ref: cranelift::codegen::ir::FuncRef,
+    json_schemas: &'a HashMap<String, (usize, usize)>,
     sync_layouts: &'a HashMap<String, usize>,
     svec_clear_ref: cranelift::codegen::ir::FuncRef,
     group_begin_ref: cranelift::codegen::ir::FuncRef,
@@ -269,6 +272,14 @@ impl JitCompiler {
             lang_runtime::striv_ecs_query_run as *const u8,
         );
         builder.symbol(
+            "striv_struct_to_json",
+            lang_runtime::striv_struct_to_json as *const u8,
+        );
+        builder.symbol(
+            "striv_struct_from_json",
+            lang_runtime::striv_struct_from_json as *const u8,
+        );
+        builder.symbol(
             "striv_svec_clear",
             lang_runtime::striv_svec_clear as *const u8,
         );
@@ -349,7 +360,19 @@ impl JitCompiler {
 
     pub fn compile_program(&mut self, prog: &Program) -> *const u8 {
         let mut sync_layouts: HashMap<String, usize> = HashMap::new();
+        let mut json_schemas: HashMap<String, (usize, usize)> = HashMap::new();
         for s in &prog.structs {
+            let schema_str: String = s
+                .fields
+                .iter()
+                .map(|(fnm, fty)| format!("{}:{}:{}", fnm, fty, field_offset(s, fnm)))
+                .collect::<Vec<_>>()
+                .join(",");
+            let leaked_schema: &'static str = Box::leak(schema_str.into_boxed_str());
+            json_schemas.insert(
+                s.name.clone(),
+                (leaked_schema.as_ptr() as usize, leaked_schema.len()),
+            );
             if s.sync_mask != 0 {
                 let mut layout = Vec::with_capacity(3 + s.fields.len() * 2);
                 layout.push(s.fields.len() as u32);
@@ -674,6 +697,19 @@ impl JitCompiler {
             .module
             .declare_function("striv_ecs_query_run", Linkage::Import, &sig_7i_v)
             .unwrap();
+        let to_json_id = self
+            .module
+            .declare_function("striv_struct_to_json", Linkage::Import, &sig_3i)
+            .unwrap();
+        let mut sig_4i_i = self.module.make_signature();
+        for _ in 0..4 {
+            sig_4i_i.params.push(AbiParam::new(int_ty));
+        }
+        sig_4i_i.returns.push(AbiParam::new(int_ty));
+        let from_json_id = self
+            .module
+            .declare_function("striv_struct_from_json", Linkage::Import, &sig_4i_i)
+            .unwrap();
 
         let mut user_enums = HashMap::new();
         let mut enum_defs = HashMap::new();
@@ -982,6 +1018,9 @@ impl JitCompiler {
                     ecs_query_run_ref: self
                         .module
                         .declare_func_in_func(ecs_query_run_id, builder.func),
+                    to_json_ref: self.module.declare_func_in_func(to_json_id, builder.func),
+                    from_json_ref: self.module.declare_func_in_func(from_json_id, builder.func),
+                    json_schemas: &json_schemas,
                     sync_layouts: &sync_layouts,
                     svec_clear_ref: self
                         .module
@@ -1424,6 +1463,44 @@ fn compile_call(
             name
         );
     }
+    if let Some(s_name) = name
+        .strip_suffix("::from_json")
+        .or_else(|| name.strip_suffix("__from_json"))
+    {
+        let def = env
+            .structs
+            .get(s_name)
+            .unwrap_or_else(|| panic!("Unknown struct '{}' in from_json", s_name))
+            .clone();
+        let byte_size = struct_byte_size(&def);
+        let slot = builder.create_sized_stack_slot(StackSlotData::new(
+            StackSlotKind::ExplicitSlot,
+            byte_size,
+            3,
+        ));
+        let base = builder.ins().stack_addr(env.int_ty, slot, 0);
+        let zero = builder.ins().iconst(env.int_ty, 0);
+        for off in (0..byte_size).step_by(8) {
+            if off + 8 <= byte_size {
+                builder.ins().store(MemFlagsData::new(), zero, base, off as i32);
+            }
+        }
+        for (df_name, df_expr) in &def.default_fields {
+            let dv = compile_expr(df_expr, builder, vars, env);
+            let off = field_offset(&def, df_name);
+            let f_ty = field_type(&def, df_name);
+            store_struct_field(builder, dv, base, off, f_ty);
+        }
+        let json_ptr = compile_expr(&args[0], builder, vars, env);
+        let &(sp, sl) = env.json_schemas.get(s_name).unwrap();
+        let s_ptr = builder.ins().iconst(env.int_ty, sp as i64);
+        let s_len = builder.ins().iconst(env.int_ty, sl as i64);
+        builder
+            .ins()
+            .call(env.from_json_ref, &[base, s_ptr, s_len, json_ptr]);
+        return base;
+    }
+
     let (func_ref, param_meta) = env
         .funcs
         .get(name)
@@ -1585,6 +1662,30 @@ fn compile_method_call(
         };
     }
 
+    if method == "to_json" {
+        let (base_ptr, struct_name) = match vars.get(receiver) {
+            Some(VarInfo::Struct {
+                slot, struct_name, ..
+            }) => (
+                builder.ins().stack_addr(env.int_ty, *slot, 0),
+                struct_name.clone(),
+            ),
+            Some(VarInfo::StructPtr {
+                ptr_var,
+                struct_name,
+                ..
+            }) => (builder.use_var(*ptr_var), struct_name.clone()),
+            _ => panic!("'{}' is not a struct for .to_json()", receiver),
+        };
+        let &(sp, sl) = env.json_schemas.get(&struct_name).unwrap();
+        let s_ptr = builder.ins().iconst(env.int_ty, sp as i64);
+        let s_len = builder.ins().iconst(env.int_ty, sl as i64);
+        let c = builder
+            .ins()
+            .call(env.to_json_ref, &[base_ptr, s_ptr, s_len]);
+        return builder.inst_results(c)[0];
+    }
+
     if let Some(VarInfo::Handle { var, type_name, .. }) = vars.get(receiver).cloned() {
         if type_name == "Ecs" && method == "set" {
             let ecs_ptr = builder.use_var(var);
@@ -1620,6 +1721,26 @@ fn compile_method_call(
                 .call(env.ecs_set_ref, &[ecs_ptr, ent_val, tid, esz, base]);
             return builder.inst_results(c)[0];
         }
+    }
+
+    if let Some(VarInfo::Str { var, .. }) = vars.get(receiver).cloned() {
+        let s_ptr = builder.use_var(var);
+        let fn_key = format!("String__{}", method);
+        let (f_ref, param_meta) = env
+            .funcs
+            .get(&fn_key)
+            .unwrap_or_else(|| panic!("Unknown method '.{}()' on String", method))
+            .clone();
+        let mut call_args = vec![s_ptr];
+        for (i, a) in args.iter().enumerate() {
+            let mut v = compile_expr(a, builder, vars, env);
+            if param_meta.get(i + 1).map(|(t, _)| t == "float").unwrap_or(false) {
+                v = to_f64(v, builder);
+            }
+            call_args.push(v);
+        }
+        let c = builder.ins().call(f_ref, &call_args);
+        return builder.inst_results(c)[0];
     }
 
     if let Some(VarInfo::Bytes { var, .. }) = vars.get(receiver).cloned() {
@@ -1867,7 +1988,53 @@ fn compile_stmt(
             is_mut,
             value,
         } => {
-            if let Some(inner_s) = ty_hint
+            if let Some((s_name, c_args)) = match value {
+                Expr::Call { name: cn, args: ca } => cn
+                    .strip_suffix("::from_json")
+                    .or_else(|| cn.strip_suffix("__from_json"))
+                    .map(|sn| (sn, ca)),
+                _ => None,
+            } {
+                let def = env
+                    .structs
+                    .get(s_name)
+                    .unwrap_or_else(|| panic!("Unknown struct '{}' in from_json", s_name))
+                    .clone();
+                let byte_size = struct_byte_size(&def);
+                let slot = builder.create_sized_stack_slot(StackSlotData::new(
+                    StackSlotKind::ExplicitSlot,
+                    byte_size,
+                    3,
+                ));
+                let base = builder.ins().stack_addr(env.int_ty, slot, 0);
+                let zero = builder.ins().iconst(env.int_ty, 0);
+                for off in (0..byte_size).step_by(8) {
+                    if off + 8 <= byte_size {
+                        builder.ins().store(MemFlagsData::new(), zero, base, off as i32);
+                    }
+                }
+                for (df_name, df_expr) in &def.default_fields {
+                    let dv = compile_expr(df_expr, builder, vars, env);
+                    let off = field_offset(&def, df_name);
+                    let f_ty = field_type(&def, df_name);
+                    store_struct_field(builder, dv, base, off, f_ty);
+                }
+                let json_ptr = compile_expr(&c_args[0], builder, vars, env);
+                let &(sp, sl) = env.json_schemas.get(s_name).unwrap();
+                let s_ptr = builder.ins().iconst(env.int_ty, sp as i64);
+                let s_len = builder.ins().iconst(env.int_ty, sl as i64);
+                builder
+                    .ins()
+                    .call(env.from_json_ref, &[base, s_ptr, s_len, json_ptr]);
+                vars.insert(
+                    name.clone(),
+                    VarInfo::Struct {
+                        slot,
+                        struct_name: s_name.to_string(),
+                        is_mut: *is_mut,
+                    },
+                );
+            } else if let Some(inner_s) = ty_hint
                 .as_deref()
                 .and_then(|t| t.strip_prefix("Vec<"))
                 .and_then(|t| t.strip_suffix('>'))
@@ -2080,6 +2247,19 @@ fn compile_stmt(
                         is_mut: *is_mut,
                     },
                 );
+            } else if matches!(value, Expr::MethodCall { method, .. } if method == "trim" || method == "replace" || method == "to_json")
+                || matches!(value, Expr::Call { name, .. } if name == "fs__read_text" || name == "fs::read_text")
+            {
+                let val = compile_expr(value, builder, vars, env);
+                let var = builder.declare_var(env.int_ty);
+                builder.def_var(var, val);
+                vars.insert(
+                    name.clone(),
+                    VarInfo::Str {
+                        var,
+                        is_mut: *is_mut,
+                    },
+                );
             } else if matches!(value, Expr::MethodCall { method, .. } if method == "pack_delta" || method == "pack_full")
                 || matches!(value, Expr::Call { name, .. } if name == "Bytes__new" || name == "Bytes::new" || env.fn_ret_handles.get(name).map(|s| s == "Bytes").unwrap_or(false))
             {
@@ -2093,6 +2273,62 @@ fn compile_stmt(
                         is_mut: *is_mut,
                     },
                 );
+            } else if let Expr::Call { name: c_name, args: c_args } = value {
+                if let Some(s_name) = c_name
+                    .strip_suffix("::from_json")
+                    .or_else(|| c_name.strip_suffix("__from_json"))
+                {
+                    let def = env
+                        .structs
+                        .get(s_name)
+                        .unwrap_or_else(|| panic!("Unknown struct '{}' in from_json", s_name))
+                        .clone();
+                    let byte_size = struct_byte_size(&def);
+                    let slot = builder.create_sized_stack_slot(StackSlotData::new(
+                        StackSlotKind::ExplicitSlot,
+                        byte_size,
+                        3,
+                    ));
+                    let base = builder.ins().stack_addr(env.int_ty, slot, 0);
+                    let zero = builder.ins().iconst(env.int_ty, 0);
+                    for off in (0..byte_size).step_by(8) {
+                        if off + 8 <= byte_size {
+                            builder.ins().store(MemFlagsData::new(), zero, base, off as i32);
+                        }
+                    }
+                    for (df_name, df_expr) in &def.default_fields {
+                        let dv = compile_expr(df_expr, builder, vars, env);
+                        let off = field_offset(&def, df_name);
+                        let f_ty = field_type(&def, df_name);
+                        store_struct_field(builder, dv, base, off, f_ty);
+                    }
+                    let json_ptr = compile_expr(&c_args[0], builder, vars, env);
+                    let &(sp, sl) = env.json_schemas.get(s_name).unwrap();
+                    let s_ptr = builder.ins().iconst(env.int_ty, sp as i64);
+                    let s_len = builder.ins().iconst(env.int_ty, sl as i64);
+                    builder
+                        .ins()
+                        .call(env.from_json_ref, &[base, s_ptr, s_len, json_ptr]);
+                    vars.insert(
+                        name.clone(),
+                        VarInfo::Struct {
+                            slot,
+                            struct_name: s_name.to_string(),
+                            is_mut: *is_mut,
+                        },
+                    );
+                } else {
+                    let val = compile_expr(value, builder, vars, env);
+                    let var = builder.declare_var(env.int_ty);
+                    builder.def_var(var, val);
+                    vars.insert(
+                        name.clone(),
+                        VarInfo::Int {
+                            var,
+                            is_mut: *is_mut,
+                        },
+                    );
+                }
             } else if is_float_expr(value, vars, env) {
                 let val = to_f64(compile_expr(value, builder, vars, env), builder);
                 let var = builder.declare_var(types::F64);
@@ -2841,7 +3077,45 @@ fn compile_stmt(
             let group_ptr = env
                 .active_group
                 .expect("`spawn` must be inside a `concurrent { ... }` block!");
-            let (func_ref, param_meta) = env
+            if let Some(s_name) = name
+        .strip_suffix("::from_json")
+        .or_else(|| name.strip_suffix("__from_json"))
+    {
+        let def = env
+            .structs
+            .get(s_name)
+            .unwrap_or_else(|| panic!("Unknown struct '{}' in from_json", s_name))
+            .clone();
+        let byte_size = struct_byte_size(&def);
+        let slot = builder.create_sized_stack_slot(StackSlotData::new(
+            StackSlotKind::ExplicitSlot,
+            byte_size,
+            3,
+        ));
+        let base = builder.ins().stack_addr(env.int_ty, slot, 0);
+        let zero = builder.ins().iconst(env.int_ty, 0);
+        for off in (0..byte_size).step_by(8) {
+            if off + 8 <= byte_size {
+                builder.ins().store(MemFlagsData::new(), zero, base, off as i32);
+            }
+        }
+        for (df_name, df_expr) in &def.default_fields {
+            let dv = compile_expr(df_expr, builder, vars, env);
+            let off = field_offset(&def, df_name);
+            let f_ty = field_type(&def, df_name);
+            store_struct_field(builder, dv, base, off, f_ty);
+        }
+        let json_ptr = compile_expr(&args[0], builder, vars, env);
+        let &(sp, sl) = env.json_schemas.get(s_name).unwrap();
+        let s_ptr = builder.ins().iconst(env.int_ty, sp as i64);
+        let s_len = builder.ins().iconst(env.int_ty, sl as i64);
+        builder
+            .ins()
+            .call(env.from_json_ref, &[base, s_ptr, s_len, json_ptr]);
+        return false;
+    }
+
+    let (func_ref, param_meta) = env
                 .funcs
                 .get(name)
                 .cloned()
@@ -3951,7 +4225,11 @@ fn expr_struct_type(
             | Some(VarInfo::StructPtr { struct_name, .. }) => Some(struct_name.clone()),
             _ => None,
         },
-        Expr::Call { name, .. } => env.fn_ret_structs.get(name).cloned().flatten(),
+        Expr::Call { name, .. } => name
+            .strip_suffix("::from_json")
+            .or_else(|| name.strip_suffix("__from_json"))
+            .map(|s| s.to_string())
+            .or_else(|| env.fn_ret_structs.get(name).cloned().flatten()),
         Expr::BinOp { left, .. } => expr_struct_type(left, vars, env),
         _ => None,
     }

@@ -353,6 +353,14 @@ impl LanguageServer for StrivLsp {
                     sort_text: Some("3_byte_len".to_string()),
                     ..Default::default()
                 });
+                items.push(CompletionItem {
+                    label: "to_bytes".to_string(),
+                    kind: Some(CompletionItemKind::METHOD),
+                    insert_text: Some("to_bytes()".to_string()),
+                    detail: Some("fn to_bytes() -> Bytes".to_string()),
+                    sort_text: Some("4_to_bytes".to_string()),
+                    ..Default::default()
+                });
                 return Ok(Some(CompletionResponse::Array(items)));
             }
             if visible

@@ -515,6 +515,14 @@ pub fn std_collection_symbols() -> Vec<(&'static str, *const u8, &'static str, b
         ("Ecs::new", crate::ecs::striv_ecs_new as *const u8, "->i", false),
         ("Ecs::spawn", crate::ecs::striv_ecs_spawn as *const u8, "i->i", false),
         ("Ecs::remove_entity", crate::ecs::striv_ecs_remove_entity as *const u8, "ii->i", false),
+        ("String::trim", striv_str_trim as *const u8, "i->i", false),
+        ("String::contains", striv_str_contains as *const u8, "ii->i", false),
+        ("String::starts_with", striv_str_starts_with as *const u8, "ii->i", false),
+        ("String::replace", striv_str_replace as *const u8, "iii->i", false),
+        ("String::to_int", striv_str_to_int as *const u8, "i->i", false),
+        ("String::to_float", striv_str_to_float as *const u8, "i->f", false),
+        ("fs::read_text", striv_fs_read_text as *const u8, "i->i", false),
+        ("fs::write_text", striv_fs_write_text as *const u8, "ii->i", false),
         // Constructors
         ("Deque::new", striv_deque_new as *const u8, "->i", false),
         ("Map::new", striv_map_new as *const u8, "->i", false),
@@ -748,6 +756,61 @@ pub extern "C" fn striv_svec_byte_len(v_ptr: *const RawStructVec) -> i64 {
 pub extern "C" fn striv_svec_to_bytes(v_ptr: *const RawStructVec) -> *mut Vec<u8> {
     let data = unsafe { (*v_ptr).data.clone() };
     Box::into_raw(Box::new(data))
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_str_trim(s: *const String) -> *mut String {
+    Box::into_raw(Box::new(unsafe { (*s).trim().to_string() }))
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_str_contains(s: *const String, pat: *const String) -> i64 {
+    unsafe { (*s).contains((*pat).as_str()) as i64 }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_str_starts_with(s: *const String, pat: *const String) -> i64 {
+    unsafe { (*s).starts_with((*pat).as_str()) as i64 }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_str_replace(
+    s: *const String,
+    a: *const String,
+    b: *const String,
+) -> *mut String {
+    Box::into_raw(Box::new(unsafe {
+        (*s).replace((*a).as_str(), (*b).as_str())
+    }))
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_str_to_int(s: *const String) -> i64 {
+    unsafe { (*s).trim().parse::<i64>().unwrap_or(0) }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_str_to_float(s: *const String) -> f64 {
+    unsafe { (*s).trim().parse::<f64>().unwrap_or(0.0) }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_fs_read_text(path: *const String) -> *mut String {
+    let p = unsafe { &*path };
+    let content = std::fs::read_to_string(p).unwrap_or_default();
+    Box::into_raw(Box::new(content))
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_fs_write_text(path: *const String, data: *const String) -> i64 {
+    let p = unsafe { &*path };
+    let d = unsafe { &*data };
+    if let Some(parent) = std::path::Path::new(p).parent() {
+        if !parent.as_os_str().is_empty() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+    }
+    std::fs::write(p, d).is_ok() as i64
 }
 
 #[unsafe(no_mangle)]

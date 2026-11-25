@@ -1,8 +1,10 @@
 pub mod collections;
 pub mod ecs;
 pub mod generated_bridge;
+pub mod json_io;
 pub use collections::*;
 pub use ecs::*;
+pub use json_io::*;
 
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Mutex, OnceLock};

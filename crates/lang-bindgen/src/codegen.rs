@@ -180,6 +180,24 @@ pub fn emit_crate_bridge(apis: &[CrateApi]) -> (String, SyncSummary) {
                         ));
                         call_args.push(format!("b_arg{i}"));
                     }
+                    ArgKind::IntoStr => {
+                        call_args.push(format!("unsafe {{ &*(arg{i} as *const String) }}.as_str().into()"));
+                    }
+                    ArgKind::AsPath => {
+                        call_args.push(format!("std::path::Path::new(unsafe {{ &*(arg{i} as *const String) }}.as_str())"));
+                    }
+                    ArgKind::MutFloat(fty) => {
+                        out.push_str(&format!("    let mut mf{i} = unsafe {{ *(arg{i} as *mut f64) }} as {fty};\n"));
+                        call_args.push(format!("&mut mf{i}"));
+                    }
+                    ArgKind::MutInt(ity) => {
+                        if ity == "bool" {
+                            out.push_str(&format!("    let mut mi{i} = unsafe {{ *(arg{i} as *mut i64) }} != 0;\n"));
+                        } else {
+                            out.push_str(&format!("    let mut mi{i} = unsafe {{ *(arg{i} as *mut i64) }} as {ity};\n"));
+                        }
+                        call_args.push(format!("&mut mi{i}"));
+                    }
                     ArgKind::Enum(en_name) => {
                         call_args.push(format!(
                             "auto_enum_{}_{}(arg{})",

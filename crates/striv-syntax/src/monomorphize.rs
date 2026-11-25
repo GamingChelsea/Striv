@@ -275,6 +275,7 @@ fn mono_expr(
                         type_params: Vec::new(),
                         fields: new_fields,
                         sync_mask: tpl.sync_mask,
+                        default_fields: tpl.default_fields.clone(),
                     });
                 }
                 *name = mangled;

@@ -28,6 +28,33 @@ fn main() {
                 elapsed, exec_elapsed, res
             );
         }
+        "new" => {
+            let proj_name = args
+                .get(2)
+                .expect("Projektname angeben: striv new space_game");
+            let root = std::path::Path::new(proj_name);
+            std::fs::create_dir_all(root.join("src")).expect("Konnte src/ nicht anlegen");
+            std::fs::create_dir_all(root.join("mods")).expect("Konnte mods/ nicht anlegen");
+            std::fs::create_dir_all(root.join(".vscode")).expect("Konnte .vscode/ nicht anlegen");
+            std::fs::write(
+                root.join("striv.toml"),
+                format!("[package]\nname = \"{}\"\nversion = \"0.1.0\"\n\n[dependencies]\n", proj_name),
+            )
+            .expect("Konnte striv.toml nicht schreiben");
+            std::fs::write(
+                root.join("src/main.strv"),
+                "fn main() {\n    print(\"Willkommen in Striv!\")\n}\n",
+            )
+            .expect("Konnte src/main.strv nicht schreiben");
+            std::fs::write(root.join(".gitignore"), "target/\n.striv-release/\n")
+                .expect("Konnte .gitignore nicht schreiben");
+            std::fs::write(
+                root.join(".vscode/settings.json"),
+                "{\n    \"files.associations\": {\n        \"*.strv\": \"striv\"\n    }\n}\n",
+            )
+            .expect("Konnte .vscode/settings.json nicht schreiben");
+            println!("[Striv] Neues Projekt '{}' erstellt!", proj_name);
+        }
         "bindgen-cs" => {
             let path = args.get(2).expect("Datei angeben: striv bindgen-cs api.strv");
             let out_path = args.get(3).map(|s| s.as_str()).unwrap_or("StrivModApi.cs");

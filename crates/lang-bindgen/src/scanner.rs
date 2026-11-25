@@ -22,6 +22,10 @@ pub enum ArgKind {
     StrRef,                  // &str
     U32Slice,                // &[u32]
     U8Slice,                 // &[u8]
+    IntoStr,                 // impl Into<String> / AsRef<str>
+    AsPath,                  // impl AsRef<Path>
+    MutFloat(String),        // &mut f32 / &mut f64
+    MutInt(String),          // &mut i32 / &mut i64 / &mut bool
     Enum(String),            // unit enum in same crate
     Handle(String),          // struct in same crate (by value or &T / &mut T)
     HandleRef(String, bool), // (&T, is_mut)
@@ -493,6 +497,9 @@ fn striv_type_label(kind: &ArgKind) -> String {
         ArgKind::StrRef => "String".to_string(),
         ArgKind::U32Slice => "Vec".to_string(),
         ArgKind::U8Slice => "Bytes".to_string(),
+        ArgKind::IntoStr | ArgKind::AsPath => "String".to_string(),
+        ArgKind::MutFloat(_) => "float".to_string(),
+        ArgKind::MutInt(_) => "int".to_string(),
         ArgKind::Enum(e) => e.clone(),
         ArgKind::Handle(h) | ArgKind::HandleRef(h, _) => h.clone(),
     }
@@ -583,6 +590,35 @@ fn classify_arg(ty: &Type, enums: &[String], structs: &[String]) -> Option<ArgKi
                 }
                 if type_ident(&sl.elem).as_deref() == Some("u8") && r.mutability.is_none() {
                     return Some(ArgKind::U8Slice);
+                }
+            }
+            if r.mutability.is_some() {
+                if let Some(id) = type_ident(&r.elem) {
+                    if matches!(id.as_str(), "f32" | "f64") {
+                        return Some(ArgKind::MutFloat(id));
+                    }
+                    if matches!(id.as_str(), "i32" | "i64" | "u32" | "u64" | "isize" | "usize" | "bool") {
+                        return Some(ArgKind::MutInt(id));
+                    }
+                }
+            }
+            None
+        }
+        Type::ImplTrait(it) => {
+            for b in &it.bounds {
+                if let syn::TypeParamBound::Trait(tb) = b {
+                    let s = tb
+                        .path
+                        .segments
+                        .iter()
+                        .map(|seg| seg.ident.to_string())
+                        .collect::<Vec<_>>()
+                        .join("::");
+                    if s.contains("Path") {
+                        return Some(ArgKind::AsPath);
+                    } else if s.contains("Into") || s.contains("str") || s.contains("ToString") {
+                        return Some(ArgKind::IntoStr);
+                    }
                 }
             }
             None

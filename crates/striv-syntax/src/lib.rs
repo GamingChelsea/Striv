@@ -73,6 +73,7 @@ pub struct StructDef {
     pub type_params: Vec<String>,
     pub fields: Vec<(String, String)>, // (field_name, type_name)
     pub sync_mask: u64,
+    pub default_fields: Vec<(String, Expr)>,
 }
 
 #[derive(Debug, Clone)]
@@ -906,6 +907,7 @@ impl Parser {
         self.expect(Token::LBrace);
         let mut fields = Vec::new();
         let mut sync_mask = 0u64;
+        let mut default_fields = Vec::new();
         while self.peek() != Some(&Token::RBrace) {
             let is_sync = if self.peek() == Some(&Token::Sync) {
                 self.next();
@@ -923,6 +925,10 @@ impl Parser {
             if is_sync && fields.len() < 64 {
                 sync_mask |= 1u64 << fields.len();
             }
+            if self.peek() == Some(&Token::Assign) {
+                self.next();
+                default_fields.push((f_name.clone(), self.parse_expr()));
+            }
             fields.push((f_name, f_ty));
             if self.peek() == Some(&Token::Comma) {
                 self.next();
@@ -934,6 +940,7 @@ impl Parser {
             type_params,
             fields,
             sync_mask,
+            default_fields,
         }
     }
 
