@@ -176,6 +176,8 @@ pub struct JitCompiler {
     // Box keeps the StructDef memory address stable for host_print_struct
     kept_structs: HashMap<String, Box<StructDef>>,
     kept_literals: Vec<Box<[u8]>>,
+    kept_schemas: Vec<Box<str>>,
+    kept_layouts: Vec<Box<[u32]>>,
     pub compiled_fns: HashMap<String, *const u8>,
     pub sandbox_mode: bool,
 }
@@ -347,6 +349,8 @@ impl JitCompiler {
             module: JITModule::new(builder),
             kept_structs: HashMap::new(),
             kept_literals: Vec::new(),
+            kept_schemas: Vec::new(),
+            kept_layouts: Vec::new(),
             compiled_fns: HashMap::new(),
             sandbox_mode: false,
         }
@@ -359,36 +363,48 @@ impl JitCompiler {
     }
 
     pub fn compile_program(&mut self, prog: &Program) -> *const u8 {
+        let unit_names: std::collections::HashSet<&str> =
+            prog.units.iter().map(|u| u.name.as_str()).collect();
         let mut sync_layouts: HashMap<String, usize> = HashMap::new();
         let mut json_schemas: HashMap<String, (usize, usize)> = HashMap::new();
         for s in &prog.structs {
-            let schema_str: String = s
+            let mut s_norm = s.clone();
+            if !unit_names.is_empty() {
+                for (_, fty) in &mut s_norm.fields {
+                    if unit_names.contains(fty.as_str()) {
+                        *fty = "float".to_string();
+                    }
+                }
+            }
+            let schema_str: String = s_norm
                 .fields
                 .iter()
-                .map(|(fnm, fty)| format!("{}:{}:{}", fnm, fty, field_offset(s, fnm)))
+                .map(|(fnm, fty)| format!("{}:{}:{}", fnm, fty, field_offset(&s_norm, fnm)))
                 .collect::<Vec<_>>()
                 .join(",");
-            let leaked_schema: &'static str = Box::leak(schema_str.into_boxed_str());
+            let boxed_schema: Box<str> = schema_str.into_boxed_str();
             json_schemas.insert(
-                s.name.clone(),
-                (leaked_schema.as_ptr() as usize, leaked_schema.len()),
+                s_norm.name.clone(),
+                (boxed_schema.as_ptr() as usize, boxed_schema.len()),
             );
-            if s.sync_mask != 0 {
-                let mut layout = Vec::with_capacity(3 + s.fields.len() * 2);
-                layout.push(s.fields.len() as u32);
-                layout.push(s.sync_mask as u32);
-                layout.push((s.sync_mask >> 32) as u32);
-                for (f_name, f_ty) in &s.fields {
-                    let off = field_offset(s, f_name) as u32;
+            self.kept_schemas.push(boxed_schema);
+            if s_norm.sync_mask != 0 {
+                let mut layout = Vec::with_capacity(3 + s_norm.fields.len() * 2);
+                layout.push(s_norm.fields.len() as u32);
+                layout.push(s_norm.sync_mask as u32);
+                layout.push((s_norm.sync_mask >> 32) as u32);
+                for (f_name, f_ty) in &s_norm.fields {
+                    let off = field_offset(&s_norm, f_name) as u32;
                     let (sz, _) = field_type_info(f_ty);
                     layout.push(off);
                     layout.push(sz);
                 }
-                let leaked = Box::leak(layout.into_boxed_slice());
-                sync_layouts.insert(s.name.clone(), leaked.as_ptr() as usize);
+                let boxed_layout = layout.into_boxed_slice();
+                sync_layouts.insert(s_norm.name.clone(), boxed_layout.as_ptr() as usize);
+                self.kept_layouts.push(boxed_layout);
             }
             self.kept_structs
-                .insert(s.name.clone(), Box::new(s.clone()));
+                .insert(s_norm.name.clone(), Box::new(s_norm));
         }
 
         let target_config = self.module.target_config();
@@ -731,7 +747,21 @@ impl JitCompiler {
         }
 
         let expanded_funcs = expand_trailing_blocks(&prog.functions);
-        let (all_functions, par_helpers) = extract_parallel_bodies(&expanded_funcs);
+        let (mut all_functions, par_helpers) = extract_parallel_bodies(&expanded_funcs);
+        if !unit_names.is_empty() {
+            for func in &mut all_functions {
+                for (_, p_ty, _) in &mut func.params {
+                    if unit_names.contains(p_ty.as_str()) {
+                        *p_ty = "float".to_string();
+                    }
+                }
+                if let Some(rt) = &mut func.ret_type {
+                    if unit_names.contains(rt.as_str()) {
+                        *rt = "float".to_string();
+                    }
+                }
+            }
+        }
 
         // 1. Pre-register all functions so they can call each other
         let mut func_ids = Vec::new();
@@ -774,6 +804,79 @@ impl JitCompiler {
             func_ids.push(id);
         }
 
+        // Pre-declare external & std collection functions once per module instead of per-function
+        let mut predeclared_externs: Vec<(String, cranelift_module::FuncId, Vec<(String, bool)>)> =
+            Vec::new();
+        for &(striv_name, c_sym, _, sig_str) in
+            lang_runtime::generated_bridge::exported_symbols()
+        {
+            let (params_s, ret_s) = sig_str.split_once("->").unwrap_or((sig_str, "i"));
+            let mut sig_ext = self.module.make_signature();
+            for ch in params_s.chars() {
+                let ty = if ch == 'f' { types::F64 } else { int_ty };
+                sig_ext.params.push(AbiParam::new(ty));
+            }
+            let ret_ty = if ret_s.starts_with('f') {
+                types::F64
+            } else {
+                int_ty
+            };
+            sig_ext.returns.push(AbiParam::new(ret_ty));
+            let ext_id = self
+                .module
+                .declare_function(c_sym, Linkage::Import, &sig_ext)
+                .unwrap();
+            let param_types = params_s
+                .chars()
+                .map(|ch| {
+                    if ch == 'f' {
+                        ("float".into(), false)
+                    } else {
+                        ("int".into(), false)
+                    }
+                })
+                .collect();
+            predeclared_externs.push((striv_name.to_string(), ext_id, param_types));
+        }
+        for (s_name, _, sig_str, mut_self) in lang_runtime::std_collection_symbols() {
+            let sym = format!("striv_std_{}", s_name.replace("::", "__"));
+            let (params_s, ret_s) = sig_str.split_once("->").unwrap_or((sig_str, "i"));
+            let mut sig_std = self.module.make_signature();
+            for ch in params_s.chars() {
+                let ty = if ch == 'f' { types::F64 } else { int_ty };
+                sig_std.params.push(AbiParam::new(ty));
+            }
+            let ret_ty = if ret_s.starts_with('f') {
+                types::F64
+            } else {
+                int_ty
+            };
+            sig_std.returns.push(AbiParam::new(ret_ty));
+            let std_id = self
+                .module
+                .declare_function(&sym, Linkage::Import, &sig_std)
+                .unwrap();
+            let mut param_types: Vec<(String, bool)> = params_s
+                .chars()
+                .map(|ch| {
+                    if ch == 'f' {
+                        ("float".into(), false)
+                    } else {
+                        ("int".into(), false)
+                    }
+                })
+                .collect();
+            if mut_self && !param_types.is_empty() {
+                param_types[0].1 = true;
+            }
+            predeclared_externs.push((s_name.replace("::", "__"), std_id, param_types));
+        }
+
+        let user_func_meta: Vec<Vec<(String, bool)>> = all_functions
+            .iter()
+            .map(|f| f.params.iter().map(|(_, ty, m)| (ty.clone(), *m)).collect())
+            .collect();
+
         // 2. Compile each function with Cranelift
         let mut func_ctx = FunctionBuilderContext::new();
         for (i, func) in all_functions.iter().enumerate() {
@@ -800,11 +903,10 @@ impl JitCompiler {
                 builder.switch_to_block(entry);
                 builder.seal_block(entry);
 
-                let mut funcs_map = HashMap::new();
+                let mut funcs_map = HashMap::with_capacity(all_functions.len() + predeclared_externs.len() + 16);
                 for (j, f) in all_functions.iter().enumerate() {
                     let f_ref = self.module.declare_func_in_func(func_ids[j], builder.func);
-                    let param_meta = f.params.iter().map(|(_, ty, m)| (ty.clone(), *m)).collect();
-                    funcs_map.insert(f.name.clone(), (f_ref, param_meta));
+                    funcs_map.insert(f.name.clone(), (f_ref, user_func_meta[j].clone()));
                 }
                 let assert_ref = self.module.declare_func_in_func(assert_id, builder.func);
                 funcs_map.insert("assert".to_string(), (assert_ref, vec![("int".into(), false)]));
@@ -824,71 +926,9 @@ impl JitCompiler {
                         vec![("float".into(), false), ("float".into(), false)],
                     ),
                 );
-                for &(striv_name, c_sym, _, sig_str) in
-                    lang_runtime::generated_bridge::exported_symbols()
-                {
-                    let (params_s, ret_s) = sig_str.split_once("->").unwrap_or((sig_str, "i"));
-                    let mut sig_ext = self.module.make_signature();
-                    for ch in params_s.chars() {
-                        let ty = if ch == 'f' { types::F64 } else { int_ty };
-                        sig_ext.params.push(AbiParam::new(ty));
-                    }
-                    let ret_ty = if ret_s.starts_with('f') {
-                        types::F64
-                    } else {
-                        int_ty
-                    };
-                    sig_ext.returns.push(AbiParam::new(ret_ty));
-                    let ext_id = self
-                        .module
-                        .declare_function(c_sym, Linkage::Import, &sig_ext)
-                        .unwrap();
-                    let ext_ref = self.module.declare_func_in_func(ext_id, builder.func);
-                    let param_types = params_s
-                        .chars()
-                        .map(|ch| {
-                            if ch == 'f' {
-                                ("float".into(), false)
-                            } else {
-                                ("int".into(), false)
-                            }
-                        })
-                        .collect();
-                    funcs_map.insert(striv_name.to_string(), (ext_ref, param_types));
-                }
-                for (s_name, _, sig_str, mut_self) in lang_runtime::std_collection_symbols() {
-                    let sym = format!("striv_std_{}", s_name.replace("::", "__"));
-                    let (params_s, ret_s) = sig_str.split_once("->").unwrap_or((sig_str, "i"));
-                    let mut sig_std = self.module.make_signature();
-                    for ch in params_s.chars() {
-                        let ty = if ch == 'f' { types::F64 } else { int_ty };
-                        sig_std.params.push(AbiParam::new(ty));
-                    }
-                    let ret_ty = if ret_s.starts_with('f') {
-                        types::F64
-                    } else {
-                        int_ty
-                    };
-                    sig_std.returns.push(AbiParam::new(ret_ty));
-                    let std_id = self
-                        .module
-                        .declare_function(&sym, Linkage::Import, &sig_std)
-                        .unwrap();
-                    let std_ref = self.module.declare_func_in_func(std_id, builder.func);
-                    let mut param_types: Vec<(String, bool)> = params_s
-                        .chars()
-                        .map(|ch| {
-                            if ch == 'f' {
-                                ("float".into(), false)
-                            } else {
-                                ("int".into(), false)
-                            }
-                        })
-                        .collect();
-                    if mut_self && !param_types.is_empty() {
-                        param_types[0].1 = true;
-                    }
-                    funcs_map.insert(s_name.replace("::", "__"), (std_ref, param_types));
+                for (name, ext_id, param_types) in &predeclared_externs {
+                    let ext_ref = self.module.declare_func_in_func(*ext_id, builder.func);
+                    funcs_map.insert(name.clone(), (ext_ref, param_types.clone()));
                 }
                 funcs_map.insert(
                     "Bytes__write_u32".into(),
@@ -2319,13 +2359,21 @@ fn compile_stmt(
                     );
                 } else {
                     let val = compile_expr(value, builder, vars, env);
-                    let var = builder.declare_var(env.int_ty);
+                    let is_f = builder.func.dfg.value_type(val) == types::F64;
+                    let var = builder.declare_var(if is_f { types::F64 } else { env.int_ty });
                     builder.def_var(var, val);
                     vars.insert(
                         name.clone(),
-                        VarInfo::Int {
-                            var,
-                            is_mut: *is_mut,
+                        if is_f {
+                            VarInfo::Float {
+                                var,
+                                is_mut: *is_mut,
+                            }
+                        } else {
+                            VarInfo::Int {
+                                var,
+                                is_mut: *is_mut,
+                            }
                         },
                     );
                 }

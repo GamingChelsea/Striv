@@ -143,25 +143,26 @@ pub extern "C" fn striv_ecs_query_run(
 
     let candidate_entities = w.pools[&driver_tid].entities.clone();
 
-    let mut matched_rows: Vec<Vec<usize>> = Vec::with_capacity(candidate_entities.len());
+    // Flacher Pointer-Puffer (1 Allokation statt 1 Vec pro Entity!)
+    let mut matched_ptrs: Vec<usize> = Vec::with_capacity(candidate_entities.len() * n_comps);
     'ent_loop: for ent in candidate_entities {
-        let mut row = Vec::with_capacity(n_comps);
+        let start = matched_ptrs.len();
         for &tid in tids {
             if let Some(ptr) = w.pools.get_mut(&tid).and_then(|p| p.get_ptr(ent)) {
-                row.push(ptr as usize);
+                matched_ptrs.push(ptr as usize);
             } else {
+                matched_ptrs.truncate(start);
                 continue 'ent_loop;
             }
         }
-        matched_rows.push(row);
     }
 
     if is_parallel != 0 {
-        matched_rows.par_iter().for_each(|row| unsafe {
+        matched_ptrs.par_chunks_exact(n_comps).for_each(|row| unsafe {
             invoke_query_fn(body_fn_addr, row, caps);
         });
     } else {
-        for row in &matched_rows {
+        for row in matched_ptrs.chunks_exact(n_comps) {
             unsafe {
                 invoke_query_fn(body_fn_addr, row, caps);
             }
@@ -170,15 +171,22 @@ pub extern "C" fn striv_ecs_query_run(
 }
 
 unsafe fn invoke_query_fn(addr: usize, comps: &[usize], caps: &[i64]) {
-    let mut all_args = Vec::with_capacity(comps.len() + caps.len());
-    for &p in comps {
-        all_args.push(p as i64);
+    let total = comps.len() + caps.len();
+    let mut all_args = [0i64; 8];
+    assert!(
+        total <= 8,
+        "ECS query unterstützt bis zu 8 kombinierte Component- + Capture-Parameter"
+    );
+    for (i, &p) in comps.iter().enumerate() {
+        all_args[i] = p as i64;
     }
-    all_args.extend_from_slice(caps);
+    for (i, &c) in caps.iter().enumerate() {
+        all_args[comps.len() + i] = c;
+    }
 
     let ptr = addr as *const ();
     unsafe {
-        match all_args.len() {
+        match total {
             1 => {
                 std::mem::transmute::<*const (), fn(i64) -> i64>(ptr)(all_args[0]);
             }
@@ -222,7 +230,32 @@ unsafe fn invoke_query_fn(addr: usize, comps: &[usize], caps: &[i64]) {
                     all_args[5],
                 );
             }
-            _ => panic!("ECS query unterstützt bis zu 6 kombinierte Component- + Capture-Parameter"),
+            7 => {
+                std::mem::transmute::<*const (), fn(i64, i64, i64, i64, i64, i64, i64) -> i64>(ptr)(
+                    all_args[0],
+                    all_args[1],
+                    all_args[2],
+                    all_args[3],
+                    all_args[4],
+                    all_args[5],
+                    all_args[6],
+                );
+            }
+            8 => {
+                std::mem::transmute::<*const (), fn(i64, i64, i64, i64, i64, i64, i64, i64) -> i64>(
+                    ptr,
+                )(
+                    all_args[0],
+                    all_args[1],
+                    all_args[2],
+                    all_args[3],
+                    all_args[4],
+                    all_args[5],
+                    all_args[6],
+                    all_args[7],
+                );
+            }
+            _ => {}
         }
     }
 }

@@ -1112,7 +1112,7 @@ impl Parser {
             type_params: Vec::new(),
             params,
             ret_type,
-            body: Vec::new(),
+            body: self.parse_block(),
         }
     }
 
@@ -1993,7 +1993,7 @@ pub fn check_diagnostics_with_dialect(src: &str, dialect: Dialect) -> Vec<ParseE
 
     // 2. Catch parser errors & extract span
     let parsed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        Parser::new(src).parse_program()
+        Parser::new_with_dialect(src, dialect).parse_program()
     }));
 
     match parsed {
