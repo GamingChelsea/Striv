@@ -453,7 +453,7 @@ fn emit_expr(expr: &Expr, structs: &HashSet<String>) -> String {
     match expr {
         Expr::Int(v) => format!("{}i64", v),
         Expr::Hex(v) => format!("0x{:X}i64", v),
-        Expr::Float(v) => format!("{:?}f64", v),
+        Expr::Float(v) | Expr::UnitFloat(v, _) => format!("{:?}f64", v),
         Expr::Var(n) => n.clone(),
         Expr::PathConst { ty, member } => format!("{}::{}", ty, member),
         Expr::FieldAccess { var, field } => format!("{}.{}", var, field),

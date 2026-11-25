@@ -15,7 +15,7 @@ pub struct StrivLsp {
 impl StrivLsp {
     async fn validate(&self, uri: Url, text: &str) {
         let parse_errors = striv_syntax::check_diagnostics(text);
-        let diags: Vec<Diagnostic> = parse_errors
+        let mut diags: Vec<Diagnostic> = parse_errors
             .into_iter()
             .map(|err| Diagnostic {
                 range: Range::new(
@@ -28,6 +28,18 @@ impl StrivLsp {
                 ..Default::default()
             })
             .collect();
+        if diags.is_empty() {
+            let mut prog = striv_syntax::Parser::new(text).parse_program();
+            if let Err(unit_err) = striv_syntax::units::check_and_erase_units(&mut prog) {
+                diags.push(Diagnostic {
+                    range: Range::new(Position::new(0, 0), Position::new(0, 1)),
+                    severity: Some(DiagnosticSeverity::ERROR),
+                    source: Some("striv-units".to_string()),
+                    message: unit_err,
+                    ..Default::default()
+                });
+            }
+        }
         self.client.publish_diagnostics(uri, diags, None).await;
     }
 }
@@ -626,6 +638,7 @@ impl LanguageServer for StrivLsp {
             "rpc",
             "open",
             "extend",
+            "unit",
         ];
         for kw in keywords_with_space {
             items.push(CompletionItem {

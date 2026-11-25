@@ -137,6 +137,9 @@ struct CompileEnv<'a> {
     bytes_read_i64_ref: cranelift::codegen::ir::FuncRef,
     bytes_read_f64_ref: cranelift::codegen::ir::FuncRef,
     fn_ret_handles: &'a HashMap<String, String>,
+    fn_ret_floats: &'a std::collections::HashSet<String>,
+    sandbox_mode: bool,
+    check_gas_ref: cranelift::codegen::ir::FuncRef,
     sync_layouts: &'a HashMap<String, usize>,
     svec_clear_ref: cranelift::codegen::ir::FuncRef,
     group_begin_ref: cranelift::codegen::ir::FuncRef,
@@ -169,6 +172,7 @@ pub struct JitCompiler {
     kept_structs: HashMap<String, Box<StructDef>>,
     kept_literals: Vec<Box<[u8]>>,
     pub compiled_fns: HashMap<String, *const u8>,
+    pub sandbox_mode: bool,
 }
 
 fn cached_isa() -> std::sync::Arc<dyn cranelift::codegen::isa::TargetIsa> {
@@ -256,6 +260,7 @@ impl JitCompiler {
         builder.symbol("striv_bytes_read_u32", lang_runtime::striv_bytes_read_u32 as *const u8);
         builder.symbol("striv_bytes_read_i64", lang_runtime::striv_bytes_read_i64 as *const u8);
         builder.symbol("striv_bytes_read_f64", lang_runtime::striv_bytes_read_f64 as *const u8);
+        builder.symbol("striv_check_gas", lang_runtime::striv_check_gas as *const u8);
         builder.symbol(
             "striv_svec_clear",
             lang_runtime::striv_svec_clear as *const u8,
@@ -325,7 +330,14 @@ impl JitCompiler {
             kept_structs: HashMap::new(),
             kept_literals: Vec::new(),
             compiled_fns: HashMap::new(),
+            sandbox_mode: false,
         }
+    }
+
+    pub fn new_sandboxed() -> Self {
+        let mut jit = Self::new();
+        jit.sandbox_mode = true;
+        jit
     }
 
     pub fn compile_program(&mut self, prog: &Program) -> *const u8 {
@@ -634,6 +646,10 @@ impl JitCompiler {
             .module
             .declare_function("striv_take_err", Linkage::Import, &sig_take_err)
             .unwrap();
+        let check_gas_id = self
+            .module
+            .declare_function("striv_check_gas", Linkage::Import, &sig_take_err)
+            .unwrap();
 
         let mut user_enums = HashMap::new();
         let mut enum_defs = HashMap::new();
@@ -661,6 +677,7 @@ impl JitCompiler {
         let mut func_ids = Vec::new();
         let mut fn_ret_structs: HashMap<String, Option<String>> = HashMap::new();
         let mut fn_ret_handles: HashMap<String, String> = HashMap::new();
+        let mut fn_ret_floats: std::collections::HashSet<String> = std::collections::HashSet::new();
         for func in &all_functions {
             let ret_struct = func
                 .ret_type
@@ -671,6 +688,8 @@ impl JitCompiler {
             if let Some(rt) = &func.ret_type {
                 if rt == "Bytes" {
                     fn_ret_handles.insert(func.name.clone(), rt.clone());
+                } else if rt == "float" {
+                    fn_ret_floats.insert(func.name.clone());
                 }
             }
 
@@ -932,6 +951,9 @@ impl JitCompiler {
                         .module
                         .declare_func_in_func(bytes_read_f64_id, builder.func),
                     fn_ret_handles: &fn_ret_handles,
+                    fn_ret_floats: &fn_ret_floats,
+                    sandbox_mode: self.sandbox_mode,
+                    check_gas_ref: self.module.declare_func_in_func(check_gas_id, builder.func),
                     sync_layouts: &sync_layouts,
                     svec_clear_ref: self
                         .module
@@ -997,7 +1019,18 @@ impl JitCompiler {
                     let var = builder.declare_var(var_ty);
                     let val = builder.block_params(entry)[idx + param_offset];
                     builder.def_var(var, val);
-                    if ty_name == "String" {
+                    if ty_name == "__par_f64" {
+                        let fval = builder.ins().bitcast(types::F64, MemFlagsData::new(), val);
+                        let fvar = builder.declare_var(types::F64);
+                        builder.def_var(fvar, fval);
+                        vars.insert(
+                            name.clone(),
+                            VarInfo::Float {
+                                var: fvar,
+                                is_mut: false,
+                            },
+                        );
+                    } else if ty_name == "String" {
                         vars.insert(
                             name.clone(),
                             VarInfo::Str {
@@ -1306,8 +1339,9 @@ fn field_is_float(def: &StructDef, field: &str) -> bool {
 
 fn is_float_expr(expr: &Expr, vars: &HashMap<String, VarInfo>, env: &CompileEnv) -> bool {
     match expr {
-        Expr::Float(_) => true,
+        Expr::Float(_) | Expr::UnitFloat(_, _) => true,
         Expr::MethodCall { method, .. } if method == "read_f64" => true,
+        Expr::Call { name, .. } if env.fn_ret_floats.contains(name) => true,
         Expr::Var(n) => matches!(vars.get(n), Some(VarInfo::Float { .. })),
         Expr::FieldAccess { var, field } => match vars.get(var) {
             Some(VarInfo::Struct { struct_name, .. })
@@ -1332,6 +1366,18 @@ fn to_f64(val: Value, builder: &mut FunctionBuilder) -> Value {
     }
 }
 
+fn emit_sandbox_gas_guard(builder: &mut FunctionBuilder, exit_bb: Block, env: &CompileEnv) {
+    if !env.sandbox_mode {
+        return;
+    }
+    let call = builder.ins().call(env.check_gas_ref, &[]);
+    let out_of_gas = builder.inst_results(call)[0];
+    let cont_bb = builder.create_block();
+    builder.ins().brif(out_of_gas, exit_bb, &[], cont_bb, &[]);
+    builder.switch_to_block(cont_bb);
+    builder.seal_block(cont_bb);
+}
+
 fn compile_call(
     name: &str,
     args: &[Expr],
@@ -1339,6 +1385,16 @@ fn compile_call(
     vars: &HashMap<String, VarInfo>,
     env: &mut CompileEnv,
 ) -> Value {
+    if env.sandbox_mode
+        && (name == "Bytes::read_file"
+            || name == "Bytes__read_file"
+            || name.contains("write_file"))
+    {
+        panic!(
+            "Sandbox-Verstoß: Dateizugriff '{}' ist in Mods verboten!",
+            name
+        );
+    }
     let (func_ref, param_meta) = env
         .funcs
         .get(name)
@@ -2188,6 +2244,7 @@ fn compile_stmt(
 
             builder.ins().jump(header_bb, &[]);
             builder.switch_to_block(header_bb);
+            emit_sandbox_gas_guard(builder, exit_bb, env);
 
             let cond_val = compile_expr(cond, builder, vars, env);
             builder.ins().brif(cond_val, body_bb, &[], exit_bb, &[]);
@@ -2815,6 +2872,7 @@ fn compile_stmt(
 
             builder.ins().jump(header_bb, &[]);
             builder.switch_to_block(header_bb);
+            emit_sandbox_gas_guard(builder, exit_bb, env);
 
             let curr_idx = builder.use_var(idx_var);
             let cond = builder.ins().icmp(IntCC::SignedLessThan, curr_idx, len_val);
@@ -2879,6 +2937,7 @@ fn compile_stmt(
 
             builder.ins().jump(header_bb, &[]);
             builder.switch_to_block(header_bb);
+            emit_sandbox_gas_guard(builder, exit_bb, env);
 
             let curr = builder.use_var(loop_var);
             let cond = builder.ins().icmp(IntCC::SignedLessThan, curr, end_val);
@@ -3034,7 +3093,7 @@ fn compile_expr(
             builder.seal_block(ok_bb);
             val
         }
-        Expr::Float(v) => builder.ins().f64const(*v),
+        Expr::Float(v) | Expr::UnitFloat(v, _) => builder.ins().f64const(*v),
         Expr::PathConst { ty, member } => {
             let key = format!("{}__{}", ty, member);
             let val = env
@@ -3494,7 +3553,7 @@ fn collect_parallel_in_stmts(
                     th.clone()
                 } else {
                     match value {
-                        Expr::Float(_) => "float".to_string(),
+                        Expr::Float(_) | Expr::UnitFloat(_, _) => "float".to_string(),
                         Expr::StrInterp(_) => "String".to_string(),
                         Expr::VecLit(_) => "Vec".to_string(),
                         Expr::StructInit { name, .. } => name.clone(),
@@ -3539,7 +3598,12 @@ fn collect_parallel_in_stmts(
                                 cap
                             );
                         }
-                        params.push((cap.clone(), cap_ty.clone(), false));
+                        let param_ty = if cap_ty == "float" {
+                            "__par_f64".to_string()
+                        } else {
+                            cap_ty.clone()
+                        };
+                        params.push((cap.clone(), param_ty, false));
                         cap_names.push(cap);
                     }
                 }
@@ -3729,6 +3793,7 @@ pub fn eval_comptime_consts(prog: &Program) -> HashMap<String, i64> {
             imports: Vec::new(),
             tweaks: prog.tweaks.clone(),
             consts: Vec::new(),
+            units: Vec::new(),
             enums: prog.enums.clone(),
             structs: prog.structs.clone(),
             functions: funcs,
@@ -3740,4 +3805,43 @@ pub fn eval_comptime_consts(prog: &Program) -> HashMap<String, i64> {
         const_vals.insert(c_name.clone(), eval_fn());
     }
     const_vals
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sandbox_stops_infinite_loop() {
+        let src = r#"
+fn main() -> int {
+    let mut x = 0
+    while true {
+        x += 1
+    }
+    return x
+}
+"#;
+        let prog = striv_syntax::Parser::new(src).parse_program();
+        let mut jit = JitCompiler::new_sandboxed();
+        let ptr = jit.compile_program(&prog);
+        let f: fn() -> i64 = unsafe { std::mem::transmute(ptr) };
+        lang_runtime::set_sandbox_gas(5000);
+        let _ = f();
+        assert!(lang_runtime::take_sandbox_aborted());
+    }
+
+    #[test]
+    #[should_panic(expected = "Sandbox")]
+    fn test_sandbox_blocks_file_io() {
+        let src = r#"
+fn main() -> int {
+    let b = Bytes::read_file("secret.txt")
+    return 0
+}
+"#;
+        let prog = striv_syntax::Parser::new(src).parse_program();
+        let mut jit = JitCompiler::new_sandboxed();
+        let _ = jit.compile_program(&prog);
+    }
 }

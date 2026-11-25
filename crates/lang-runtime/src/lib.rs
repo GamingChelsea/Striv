@@ -441,6 +441,34 @@ pub fn block_on_async<F: std::future::Future>(f: F) -> F::Output {
     }
 }
 
+thread_local! {
+    static SANDBOX_GAS: std::cell::Cell<i64> = const { std::cell::Cell::new(i64::MAX) };
+    static SANDBOX_ABORTED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+pub fn set_sandbox_gas(limit: i64) {
+    SANDBOX_GAS.with(|g| g.set(limit));
+    SANDBOX_ABORTED.with(|a| a.set(false));
+}
+
+pub fn take_sandbox_aborted() -> bool {
+    SANDBOX_ABORTED.with(|a| a.replace(false))
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_check_gas() -> i64 {
+    SANDBOX_GAS.with(|g| {
+        let rem = g.get() - 1;
+        g.set(rem);
+        if rem <= 0 {
+            SANDBOX_ABORTED.with(|a| a.set(true));
+            1
+        } else {
+            0
+        }
+    })
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn striv_sin(x: f64) -> f64 {
     x.sin()

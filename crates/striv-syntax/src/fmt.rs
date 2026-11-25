@@ -478,7 +478,7 @@ pub fn format_expr(expr: &Expr) -> String {
         Expr::Some(e) => format!("Some({})", format_expr(e)),
         Expr::None => "None".to_string(),
         Expr::Try(e) => format!("{}?", format_expr(e)),
-        Expr::Float(v) => format!("{:?}", v),
+        Expr::Float(v) | Expr::UnitFloat(v, _) => format!("{:?}", v),
         Expr::PathConst { ty, member } => format!("{}::{}", ty, member),
         Expr::VecLit(items) => format!("[{}]", format_args(items)),
         Expr::Tuple(items) => format!("({})", format_args(items)),

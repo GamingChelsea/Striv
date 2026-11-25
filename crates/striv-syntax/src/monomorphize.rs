@@ -111,7 +111,7 @@ fn infer_type(
 ) -> String {
     match expr {
         Expr::Int(_) | Expr::Hex(_) => "int".to_string(),
-        Expr::Float(_) => "float".to_string(),
+        Expr::Float(_) | Expr::UnitFloat(_, _) => "float".to_string(),
         Expr::StrInterp(_) => "String".to_string(),
         Expr::VecLit(_) => "Vec".to_string(),
         Expr::Var(n) => var_types.get(n).cloned().unwrap_or_else(|| "int".to_string()),

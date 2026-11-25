@@ -28,6 +28,16 @@ fn main() {
                 elapsed, exec_elapsed, res
             );
         }
+        "bindgen-cs" => {
+            let path = args.get(2).expect("Datei angeben: striv bindgen-cs api.strv");
+            let out_path = args.get(3).map(|s| s.as_str()).unwrap_or("StrivModApi.cs");
+            let src = std::fs::read_to_string(path).expect("Konnte Datei nicht lesen");
+            let mut prog = striv_syntax::Parser::new(&src).parse_program();
+            striv_syntax::merge_open_enums(&mut prog);
+            let cs = striv_syntax::csharp_gen::generate_csharp_bindings(&prog, "striv_game");
+            std::fs::write(out_path, cs).expect("Konnte .cs Datei nicht schreiben");
+            println!("[Striv] C#-Modding-Bindings erzeugt: {}", out_path);
+        }
         "test" => {
             let path = args
                 .get(2)

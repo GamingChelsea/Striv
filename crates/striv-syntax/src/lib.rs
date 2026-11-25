@@ -1,8 +1,10 @@
 use logos::Logos;
 
+pub mod csharp_gen;
 pub mod fmt;
 pub mod monomorphize;
 pub mod release_gen;
+pub mod units;
 pub use fmt::{format_expr, format_program, format_source};
 
 // AST
@@ -40,10 +42,24 @@ pub enum MatchPat {
 }
 
 #[derive(Debug, Clone)]
+pub enum UnitExpr {
+    Name(String),
+    Mul(Box<UnitExpr>, Box<UnitExpr>),
+    Div(Box<UnitExpr>, Box<UnitExpr>),
+}
+
+#[derive(Debug, Clone)]
+pub struct UnitDef {
+    pub name: String,
+    pub formula: Option<UnitExpr>,
+}
+
+#[derive(Debug, Clone)]
 pub struct Program {
     pub imports: Vec<String>,
     pub tweaks: Vec<(String, TweakVal)>,
     pub consts: Vec<(String, Expr)>,
+    pub units: Vec<UnitDef>,
     pub enums: Vec<EnumDef>,
     pub structs: Vec<StructDef>,
     pub functions: Vec<Function>,
@@ -191,6 +207,7 @@ pub enum Expr {
     Int(i64),
     Hex(i64),
     Float(f64),
+    UnitFloat(f64, String),
     PathConst {
         ty: String,
         member: String,
@@ -334,6 +351,15 @@ pub enum Token {
     Open,
     #[token("extend")]
     Extend,
+    #[token("unit")]
+    Unit,
+    #[regex(r"[0-9]+(\.[0-9]+)?_[a-zA-Z][a-zA-Z0-9]*", |lex| {
+        let s = lex.slice();
+        let (num_s, unit_s) = s.split_once('_').unwrap();
+        let val: f64 = num_s.parse().unwrap();
+        (val, unit_s.to_string())
+    })]
+    UnitFloat((f64, String)),
     #[token("Ok")]
     OkKw,
     #[token("Err")]
@@ -466,6 +492,8 @@ impl Token {
             Token::Rpc => "`rpc`".to_string(),
             Token::Open => "`open`".to_string(),
             Token::Extend => "`extend`".to_string(),
+            Token::Unit => "`unit`".to_string(),
+            Token::UnitFloat((v, u)) => format!("{}_{}", v, u),
             Token::OkKw => "`Ok`".to_string(),
             Token::ErrKw => "`Err`".to_string(),
             Token::SomeKw => "`Some`".to_string(),
@@ -584,6 +612,7 @@ impl Parser {
         let mut imports = Vec::new();
         let mut tweaks = Vec::new();
         let mut consts = Vec::new();
+        let mut units = Vec::new();
         let mut enums = Vec::new();
         let mut structs = Vec::new();
         let mut functions = Vec::new();
@@ -686,6 +715,22 @@ impl Parser {
                     let expr = self.parse_expr();
                     consts.push((c_name, expr));
                 }
+                Token::Unit => {
+                    self.next();
+                    let Some(Token::Ident(u_name)) = self.next() else {
+                        self.error("Expected unit name after `unit`");
+                    };
+                    let formula = if self.peek() == Some(&Token::Assign) {
+                        self.next();
+                        Some(self.parse_unit_expr())
+                    } else {
+                        None
+                    };
+                    units.push(UnitDef {
+                        name: u_name,
+                        formula,
+                    });
+                }
                 t => panic!(
                     "Expected `tweak`, `const`, `struct`, `impl`, or `fn`, found: {:?}",
                     t
@@ -696,11 +741,39 @@ impl Parser {
             imports,
             tweaks,
             consts,
+            units,
             enums,
             structs,
             functions,
             tests,
         }
+    }
+
+    fn parse_unit_expr(&mut self) -> UnitExpr {
+        let mut left = self.parse_unit_atom();
+        while matches!(self.peek(), Some(Token::Star) | Some(Token::Slash)) {
+            let is_mul = self.next() == Some(Token::Star);
+            let right = self.parse_unit_atom();
+            left = if is_mul {
+                UnitExpr::Mul(Box::new(left), Box::new(right))
+            } else {
+                UnitExpr::Div(Box::new(left), Box::new(right))
+            };
+        }
+        left
+    }
+
+    fn parse_unit_atom(&mut self) -> UnitExpr {
+        if self.peek() == Some(&Token::LParen) {
+            self.next();
+            let inner = self.parse_unit_expr();
+            self.expect(Token::RParen);
+            return inner;
+        }
+        let Some(Token::Ident(name)) = self.next() else {
+            self.error("Expected unit name or '(' in unit formula");
+        };
+        UnitExpr::Name(name)
     }
 
     fn parse_enum(&mut self) -> EnumDef {
@@ -1480,6 +1553,7 @@ impl Parser {
             Some(Token::Int(v)) => Expr::Int(v),
             Some(Token::Hex(v)) => Expr::Hex(v),
             Some(Token::Float(v)) => Expr::Float(v),
+            Some(Token::UnitFloat((v, u))) => Expr::UnitFloat(v, u),
             Some(Token::Minus) => {
                 let inner = self.parse_primary();
                 let zero = if matches!(inner, Expr::Float(_)) {
@@ -1821,6 +1895,7 @@ pub fn load_program_with_imports(entry_path: &std::path::Path) -> Result<Program
         imports: Vec::new(),
         tweaks: Vec::new(),
         consts: Vec::new(),
+        units: Vec::new(),
         enums: Vec::new(),
         structs: Vec::new(),
         functions: Vec::new(),
@@ -1828,6 +1903,7 @@ pub fn load_program_with_imports(entry_path: &std::path::Path) -> Result<Program
     };
 
     load_recursive(entry_path, &mut visited, &mut combined)?;
+    units::check_and_erase_units(&mut combined).map_err(|e| e)?;
     merge_open_enums(&mut combined);
     expand_rpc_functions(&mut combined);
     monomorphize::monomorphize_program(&mut combined);
@@ -1867,6 +1943,7 @@ fn load_recursive(
 
     out.tweaks.extend(prog.tweaks);
     out.consts.extend(prog.consts);
+    out.units.extend(prog.units);
     out.enums.extend(prog.enums);
     out.structs.extend(prog.structs);
     out.functions.extend(prog.functions);
