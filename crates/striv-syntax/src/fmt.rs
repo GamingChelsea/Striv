@@ -67,7 +67,36 @@ fn count_braces_outside_strings_and_comments(line: &str) -> (usize, usize) {
     (opens, closes)
 }
 
+thread_local! {
+    static FMT_DIALECT: std::cell::Cell<crate::Dialect> =
+        const { std::cell::Cell::new(crate::Dialect::Rust) };
+    static FMT_BRACES: std::cell::Cell<crate::BraceStyle> =
+        const { std::cell::Cell::new(crate::BraceStyle::Kr) };
+}
+
+fn open_brace(ind: &str) -> String {
+    if FMT_BRACES.with(|b| b.get()) == crate::BraceStyle::Allman {
+        format!("\n{}{{\n", ind)
+    } else {
+        " {\n".to_string()
+    }
+}
+
 pub fn format_program(prog: &Program) -> String {
+    format_program_with_options(prog, crate::Dialect::Rust, crate::BraceStyle::Kr)
+}
+
+pub fn format_program_with_dialect(prog: &Program, dialect: crate::Dialect) -> String {
+    format_program_with_options(prog, dialect, crate::BraceStyle::Kr)
+}
+
+pub fn format_program_with_options(
+    prog: &Program,
+    dialect: crate::Dialect,
+    braces: crate::BraceStyle,
+) -> String {
+    FMT_DIALECT.with(|d| d.set(dialect));
+    FMT_BRACES.with(|b| b.set(braces));
     let mut out = String::new();
 
     for imp in &prog.imports {
@@ -92,14 +121,29 @@ pub fn format_program(prog: &Program) -> String {
     }
 
     for (n, expr) in &prog.consts {
-        out.push_str(&format!("const {} = {}\n", n, format_expr(expr)));
+        if dialect == crate::Dialect::Odin {
+            out.push_str(&format!("{} :: {}\n", n, format_expr(expr)));
+        } else {
+            out.push_str(&format!("const {} = {}\n", n, format_expr(expr)));
+        }
     }
     if !prog.consts.is_empty() {
         out.push('\n');
     }
 
     for e in &prog.enums {
-        out.push_str(&format!("enum {} {{\n", e.name));
+        let open_p = if e.is_extend {
+            "extend "
+        } else if e.is_open {
+            "open "
+        } else {
+            ""
+        };
+        if dialect == crate::Dialect::Odin {
+            out.push_str(&format!("{} :: {}enum{}", e.name, open_p, open_brace("")));
+        } else {
+            out.push_str(&format!("{}enum {}{}", open_p, e.name, open_brace("")));
+        }
         for v in &e.variants {
             if v.field_types.is_empty() {
                 out.push_str(&format!("    {},\n", v.name));
@@ -112,7 +156,16 @@ pub fn format_program(prog: &Program) -> String {
 
     // 1. Print all structs
     for s in &prog.structs {
-        out.push_str(&format!("struct {} {{\n", s.name));
+        let tp = if s.type_params.is_empty() {
+            String::new()
+        } else {
+            format!("<{}>", s.type_params.join(", "))
+        };
+        if dialect == crate::Dialect::Odin {
+            out.push_str(&format!("{} :: struct{}{}", s.name, tp, open_brace("")));
+        } else {
+            out.push_str(&format!("struct {}{}{}", s.name, tp, open_brace("")));
+        }
         for (f, ty) in &s.fields {
             out.push_str(&format!("    {}: {},\n", f, ty));
         }
@@ -178,13 +231,35 @@ fn format_fn(f: &Function, display_name: &str, level: usize, out: &mut String) {
         Some(rt) => format!(" -> {}", rt),
         None => String::new(),
     };
-    out.push_str(&format!(
-        "{}fn {}({}){} {{\n",
-        ind,
-        display_name,
-        params_str.join(", "),
-        ret_str
-    ));
+    let tp = if f.type_params.is_empty() {
+        String::new()
+    } else {
+        format!("<{}>", f.type_params.join(", "))
+    };
+    let rpc_p = if f.is_rpc { "rpc " } else { "" };
+    if FMT_DIALECT.with(|d| d.get()) == crate::Dialect::Odin && level == 0 {
+        out.push_str(&format!(
+            "{}{} :: {}proc{}({}){}{}",
+            ind,
+            display_name,
+            rpc_p,
+            tp,
+            params_str.join(", "),
+            ret_str,
+            open_brace(&ind)
+        ));
+    } else {
+        out.push_str(&format!(
+            "{}{}fn {}{}({}){}{}",
+            ind,
+            rpc_p,
+            display_name,
+            tp,
+            params_str.join(", "),
+            ret_str,
+            open_brace(&ind)
+        ));
+    }
     for stmt in &f.body {
         format_stmt(stmt, level + 1, out);
     }
@@ -201,18 +276,39 @@ fn format_stmt(stmt: &Stmt, level: usize, out: &mut String) {
             value,
         } => {
             let m = if *is_mut { "mut " } else { "" };
-            let ty_s = ty_hint
-                .as_ref()
-                .map(|t| format!(": {}", t))
-                .unwrap_or_default();
-            out.push_str(&format!(
-                "{}let {}{}{} = {}\n",
-                ind,
-                m,
-                name,
-                ty_s,
-                format_expr(value)
-            ));
+            if FMT_DIALECT.with(|d| d.get()) == crate::Dialect::Odin {
+                if let Some(t) = ty_hint {
+                    out.push_str(&format!(
+                        "{}{}{} : {} = {}\n",
+                        ind,
+                        m,
+                        name,
+                        t,
+                        format_expr(value)
+                    ));
+                } else {
+                    out.push_str(&format!(
+                        "{}{}{} := {}\n",
+                        ind,
+                        m,
+                        name,
+                        format_expr(value)
+                    ));
+                }
+            } else {
+                let ty_s = ty_hint
+                    .as_ref()
+                    .map(|t| format!(": {}", t))
+                    .unwrap_or_default();
+                out.push_str(&format!(
+                    "{}let {}{}{} = {}\n",
+                    ind,
+                    m,
+                    name,
+                    ty_s,
+                    format_expr(value)
+                ));
+            }
         }
         Stmt::Break => out.push_str(&format!("{}break\n", ind)),
         Stmt::Continue => out.push_str(&format!("{}continue\n", ind)),

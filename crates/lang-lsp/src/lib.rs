@@ -12,9 +12,20 @@ pub struct StrivLsp {
     documents: RwLock<HashMap<Url, String>>,
 }
 
+fn options_from_uri(uri: &Url) -> (striv_syntax::Dialect, striv_syntax::BraceStyle) {
+    let s = uri.as_str();
+    let clean = s.strip_prefix("file:///").unwrap_or(s).replace("%3A", ":");
+    striv_syntax::detect_format_options_for_path(std::path::Path::new(&clean))
+}
+
+fn dialect_from_uri(uri: &Url) -> striv_syntax::Dialect {
+    options_from_uri(uri).0
+}
+
 impl StrivLsp {
     async fn validate(&self, uri: Url, text: &str) {
-        let parse_errors = striv_syntax::check_diagnostics(text);
+        let dialect = dialect_from_uri(&uri);
+        let parse_errors = striv_syntax::check_diagnostics_with_dialect(text, dialect);
         let mut diags: Vec<Diagnostic> = parse_errors
             .into_iter()
             .map(|err| Diagnostic {
@@ -29,7 +40,7 @@ impl StrivLsp {
             })
             .collect();
         if diags.is_empty() {
-            let mut prog = striv_syntax::Parser::new(text).parse_program();
+            let mut prog = striv_syntax::Parser::new_with_dialect(text, dialect).parse_program();
             if let Err(unit_err) = striv_syntax::units::check_and_erase_units(&mut prog) {
                 diags.push(Diagnostic {
                     range: Range::new(Position::new(0, 0), Position::new(0, 1)),
@@ -123,10 +134,13 @@ impl LanguageServer for StrivLsp {
             return Ok(None);
         };
 
+        let (dialect, braces) = options_from_uri(&params.text_document.uri);
         // Only format when the code currently parses without errors
-        let parsed = catch_unwind(AssertUnwindSafe(|| Parser::new(src).parse_program()));
-        if parsed.is_ok() {
-            let formatted = striv_syntax::format_source(src);
+        let parsed = catch_unwind(AssertUnwindSafe(|| {
+            Parser::new_with_dialect(src, dialect).parse_program()
+        }));
+        if let Ok(prog) = parsed {
+            let formatted = striv_syntax::format_program_with_options(&prog, dialect, braces);
             let edit = TextEdit {
                 range: Range::new(Position::new(0, 0), Position::new(u32::MAX, 0)),
                 new_text: formatted,
@@ -614,6 +628,27 @@ impl LanguageServer for StrivLsp {
         }
 
         // --- CASE 3: General context (keywords with trailing space + functions) ---
+        let dialect = dialect_from_uri(&params.text_document_position.text_document.uri);
+        if dialect == striv_syntax::Dialect::Odin {
+            items.push(CompletionItem {
+                label: "proc".to_string(),
+                kind: Some(CompletionItemKind::SNIPPET),
+                insert_text: Some("${1:name} :: proc(${2}) {\n\t$0\n}".to_string()),
+                insert_text_format: Some(InsertTextFormat::SNIPPET),
+                detail: Some("Odin-Style procedure".to_string()),
+                sort_text: Some("0_proc".to_string()),
+                ..Default::default()
+            });
+            items.push(CompletionItem {
+                label: "struct".to_string(),
+                kind: Some(CompletionItemKind::SNIPPET),
+                insert_text: Some("${1:Name} :: struct {\n\t$0\n}".to_string()),
+                insert_text_format: Some(InsertTextFormat::SNIPPET),
+                detail: Some("Odin-Style struct".to_string()),
+                sort_text: Some("0_struct".to_string()),
+                ..Default::default()
+            });
+        }
         let keywords_with_space = [
             "use",
             "tweak",
@@ -651,6 +686,9 @@ impl LanguageServer for StrivLsp {
             "query",
         ];
         for kw in keywords_with_space {
+            if dialect == striv_syntax::Dialect::Odin && matches!(kw, "fn" | "let") {
+                continue;
+            }
             items.push(CompletionItem {
                 label: kw.to_string(),
                 kind: Some(CompletionItemKind::KEYWORD),

@@ -31,21 +31,53 @@ fn main() {
         "new" => {
             let proj_name = args
                 .get(2)
-                .expect("Projektname angeben: striv new space_game");
+                .expect("Projektname angeben: striv new space_game [--odin|--rust]");
+            let is_odin = if args.iter().any(|a| a == "--odin") {
+                true
+            } else if args.iter().any(|a| a == "--rust") {
+                false
+            } else {
+                println!("Welchen Syntax-Stil soll '{}' verwenden?", proj_name);
+                println!("  [1] Rust-Style  (fn main(), struct Ship, let x = 10)");
+                println!("  [2] Odin-Style  (main :: proc(), Ship :: struct, x := 10)");
+                print!("Auswahl [1/2]: ");
+                let _ = std::io::Write::flush(&mut std::io::stdout());
+                let mut input = String::new();
+                let _ = std::io::stdin().read_line(&mut input);
+                input.trim() == "2" || input.trim().eq_ignore_ascii_case("odin")
+            };
+            let is_allman = if args.iter().any(|a| a == "--allman") {
+                true
+            } else if args.iter().any(|a| a == "--kr") {
+                false
+            } else {
+                println!("Welchen Klammer-Stil (Formatter) soll '{}' verwenden?", proj_name);
+                println!("  [1] K&R-Style     (fn main() {{)");
+                println!("  [2] Allman-Style  (fn main()\\n{{)");
+                print!("Auswahl [1/2]: ");
+                let _ = std::io::Write::flush(&mut std::io::stdout());
+                let mut b_in = String::new();
+                let _ = std::io::stdin().read_line(&mut b_in);
+                b_in.trim() == "2" || b_in.trim().eq_ignore_ascii_case("allman")
+            };
             let root = std::path::Path::new(proj_name);
             std::fs::create_dir_all(root.join("src")).expect("Konnte src/ nicht anlegen");
             std::fs::create_dir_all(root.join("mods")).expect("Konnte mods/ nicht anlegen");
             std::fs::create_dir_all(root.join(".vscode")).expect("Konnte .vscode/ nicht anlegen");
+            let syntax_line = if is_odin { "syntax = \"odin\"\n" } else { "syntax = \"rust\"\n" };
+            let braces_line = if is_allman { "braces = \"allman\"\n" } else { "braces = \"kr\"\n" };
             std::fs::write(
                 root.join("striv.toml"),
-                format!("[package]\nname = \"{}\"\nversion = \"0.1.0\"\n\n[dependencies]\n", proj_name),
+                format!("[package]\nname = \"{}\"\nversion = \"0.1.0\"\n{}{}\n[dependencies]\n", proj_name, syntax_line, braces_line),
             )
             .expect("Konnte striv.toml nicht schreiben");
-            std::fs::write(
-                root.join("src/main.strv"),
-                "fn main() {\n    print(\"Willkommen in Striv!\")\n}\n",
-            )
-            .expect("Konnte src/main.strv nicht schreiben");
+            let main_src = if is_odin {
+                "main :: proc() -> int {\n    msg := \"Hallo aus Striv im Odin-Modus!\"\n    print(msg)\n    return 0\n}\n"
+            } else {
+                "fn main() {\n    print(\"Willkommen in Striv!\")\n}\n"
+            };
+            std::fs::write(root.join("src/main.strv"), main_src)
+                .expect("Konnte src/main.strv nicht schreiben");
             std::fs::write(root.join(".gitignore"), "target/\n.striv-release/\n")
                 .expect("Konnte .gitignore nicht schreiben");
             std::fs::write(
@@ -53,7 +85,32 @@ fn main() {
                 "{\n    \"files.associations\": {\n        \"*.strv\": \"striv\"\n    }\n}\n",
             )
             .expect("Konnte .vscode/settings.json nicht schreiben");
-            println!("[Striv] Neues Projekt '{}' erstellt!", proj_name);
+            println!("[Striv] Neues Projekt '{}' ({}) erstellt!", proj_name, if is_odin { "Odin-Style" } else { "Rust-Style" });
+        }
+        "switch-syntax" => {
+            let target = args
+                .get(2)
+                .expect("Dialekt angeben: striv switch-syntax <odin|rust> [datei.strv]");
+            let target_dialect = if target.eq_ignore_ascii_case("odin") {
+                striv_syntax::Dialect::Odin
+            } else {
+                striv_syntax::Dialect::Rust
+            };
+            let file_path = args.get(3).map(|s| s.as_str()).unwrap_or("src/main.strv");
+            let p = std::path::Path::new(file_path);
+            let cur_dialect = striv_syntax::detect_dialect_for_path(p);
+            let src = std::fs::read_to_string(p).expect("Konnte .strv Datei nicht lesen");
+            let prog = striv_syntax::Parser::new_with_dialect(&src, cur_dialect).parse_program();
+            let target_braces = if args.iter().any(|a| a == "--allman") {
+                striv_syntax::BraceStyle::Allman
+            } else if args.iter().any(|a| a == "--kr") {
+                striv_syntax::BraceStyle::Kr
+            } else {
+                striv_syntax::detect_format_options_for_path(p).1
+            };
+            let converted = striv_syntax::format_program_with_options(&prog, target_dialect, target_braces);
+            std::fs::write(p, converted).expect("Konnte .strv Datei nicht schreiben");
+            println!("[Striv] '{}' konvertiert zu {:?}!", file_path, target_dialect);
         }
         "bindgen-cs" => {
             let path = args.get(2).expect("Datei angeben: striv bindgen-cs api.strv");

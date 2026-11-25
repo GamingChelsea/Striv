@@ -5,9 +5,55 @@ pub mod fmt;
 pub mod monomorphize;
 pub mod release_gen;
 pub mod units;
-pub use fmt::{format_expr, format_program, format_source};
+pub use fmt::{
+    format_expr, format_program, format_program_with_dialect, format_program_with_options,
+    format_source,
+};
 
 // AST
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Dialect {
+    Rust,
+    Odin,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BraceStyle {
+    Kr,
+    Allman,
+}
+
+pub fn detect_format_options_for_path(file_path: &std::path::Path) -> (Dialect, BraceStyle) {
+    let mut dir = if file_path.is_dir() {
+        Some(file_path)
+    } else {
+        file_path.parent()
+    };
+    while let Some(d) = dir {
+        let cfg = d.join("striv.toml");
+        if let Ok(txt) = std::fs::read_to_string(&cfg) {
+            let mut dialect = Dialect::Rust;
+            let mut braces = BraceStyle::Kr;
+            for line in txt.lines() {
+                let clean = line.trim().replace(' ', "");
+                if clean.starts_with("syntax=\"odin\"") || clean.starts_with("syntax='odin'") {
+                    dialect = Dialect::Odin;
+                }
+                if clean.starts_with("braces=\"allman\"") || clean.starts_with("braces='allman'") {
+                    braces = BraceStyle::Allman;
+                }
+            }
+            return (dialect, braces);
+        }
+        dir = d.parent();
+    }
+    (Dialect::Rust, BraceStyle::Kr)
+}
+
+pub fn detect_dialect_for_path(file_path: &std::path::Path) -> Dialect {
+    detect_format_options_for_path(file_path).0
+}
 
 #[derive(Debug, Clone)]
 pub enum TweakVal {
@@ -366,6 +412,10 @@ pub enum Token {
     Rust,
     #[token("query")]
     Query,
+    #[token("proc")]
+    Proc,
+    #[token(":=")]
+    ColonAssign,
     #[regex(r"[0-9]+(\.[0-9]+)?_[a-zA-Z][a-zA-Z0-9]*", |lex| {
         let s = lex.slice();
         let (num_s, unit_s) = s.split_once('_').unwrap();
@@ -508,6 +558,8 @@ impl Token {
             Token::Unit => "`unit`".to_string(),
             Token::Rust => "`rust`".to_string(),
             Token::Query => "`query`".to_string(),
+            Token::Proc => "`proc`".to_string(),
+            Token::ColonAssign => "`:=`".to_string(),
             Token::UnitFloat((v, u)) => format!("{}_{}", v, u),
             Token::OkKw => "`Ok`".to_string(),
             Token::ErrKw => "`Err`".to_string(),
@@ -569,10 +621,15 @@ pub struct Parser {
     src: String,
     src_len: usize,
     pos: usize,
+    pub dialect: Dialect,
 }
 
 impl Parser {
     pub fn new(src: &str) -> Self {
+        Self::new_with_dialect(src, Dialect::Rust)
+    }
+
+    pub fn new_with_dialect(src: &str, dialect: Dialect) -> Self {
         let tokens = Token::lexer(src)
             .spanned()
             .filter_map(|(res, span)| res.ok().map(|tok| (tok, span)))
@@ -582,7 +639,12 @@ impl Parser {
             src: src.to_string(),
             src_len: src.len(),
             pos: 0,
+            dialect,
         }
+    }
+
+    fn peek_at(&self, offset: usize) -> Option<&Token> {
+        self.tokens.get(self.pos + offset).map(|(t, _)| t)
     }
 
     fn current_span(&self) -> std::ops::Range<usize> {
@@ -743,6 +805,55 @@ impl Parser {
                     let expr = self.parse_expr();
                     consts.push((c_name, expr));
                 }
+                Token::Ident(_)
+                    if self.dialect == Dialect::Odin
+                        && self.peek_at(1) == Some(&Token::ColonColon) =>
+                {
+                    let Some(Token::Ident(decl_name)) = self.next() else {
+                        unreachable!()
+                    };
+                    self.expect(Token::ColonColon);
+                    match self.peek() {
+                        Some(Token::Struct) => {
+                            self.next();
+                            structs.push(self.parse_struct_rest(decl_name));
+                        }
+                        Some(Token::Open) => {
+                            self.next();
+                            self.expect(Token::Enum);
+                            let mut e = self.parse_enum_rest(decl_name);
+                            e.is_open = true;
+                            enums.push(e);
+                        }
+                        Some(Token::Extend) => {
+                            self.next();
+                            self.expect(Token::Enum);
+                            let mut e = self.parse_enum_rest(decl_name);
+                            e.is_open = true;
+                            e.is_extend = true;
+                            enums.push(e);
+                        }
+                        Some(Token::Enum) => {
+                            self.next();
+                            enums.push(self.parse_enum_rest(decl_name));
+                        }
+                        Some(Token::Rpc) => {
+                            self.next();
+                            self.expect(Token::Proc);
+                            let mut f = self.parse_proc_rest(decl_name);
+                            f.is_rpc = true;
+                            functions.push(f);
+                        }
+                        Some(Token::Proc) => {
+                            self.next();
+                            functions.push(self.parse_proc_rest(decl_name));
+                        }
+                        _ => {
+                            let val = self.parse_expr();
+                            consts.push((decl_name, val));
+                        }
+                    }
+                }
                 Token::Unit => {
                     self.next();
                     let Some(Token::Ident(u_name)) = self.next() else {
@@ -864,6 +975,10 @@ impl Parser {
         let Some(Token::Ident(name)) = self.next() else {
             self.error("Expected enum name after `enum`");
         };
+        self.parse_enum_rest(name)
+    }
+
+    fn parse_enum_rest(&mut self, name: String) -> EnumDef {
         self.expect(Token::LBrace);
         let mut variants = Vec::new();
         while self.peek() != Some(&Token::RBrace) {
@@ -903,6 +1018,10 @@ impl Parser {
         let Some(Token::Ident(name)) = self.next() else {
             panic!("Struct name expected")
         };
+        self.parse_struct_rest(name)
+    }
+
+    fn parse_struct_rest(&mut self, name: String) -> StructDef {
         let type_params = self.parse_type_params();
         self.expect(Token::LBrace);
         let mut fields = Vec::new();
@@ -1003,11 +1122,21 @@ impl Parser {
         f
     }
 
+    fn parse_proc_rest(&mut self, name: String) -> Function {
+        let mut f = self.parse_function_sig_rest(name);
+        f.body = self.parse_block();
+        f
+    }
+
     fn parse_function_sig_only(&mut self) -> Function {
         self.expect(Token::Fn);
         let Some(Token::Ident(name)) = self.next() else {
             panic!("Function Name expected")
         };
+        self.parse_function_sig_rest(name)
+    }
+
+    fn parse_function_sig_rest(&mut self, name: String) -> Function {
         let type_params = self.parse_type_params();
         self.expect(Token::LParen);
 
@@ -1360,11 +1489,52 @@ impl Parser {
                 self.next();
                 Stmt::Return(self.parse_expr())
             }
+            Some(Token::Mut) if self.dialect == Dialect::Odin => {
+                self.next();
+                let Some(Token::Ident(name)) = self.next() else {
+                    self.error("Expected variable name after `mut`");
+                };
+                let ty_hint = if self.peek() == Some(&Token::Colon) {
+                    self.next();
+                    let t = self.parse_type_name();
+                    self.expect(Token::Assign);
+                    Some(t)
+                } else {
+                    self.expect(Token::ColonAssign);
+                    None
+                };
+                Stmt::Let {
+                    name,
+                    ty_hint,
+                    is_mut: true,
+                    value: self.parse_expr(),
+                }
+            }
             Some(Token::Ident(_)) => {
                 let ident_span = self.current_span();
                 let Some(Token::Ident(name)) = self.next() else {
                     unreachable!()
                 };
+                if self.dialect == Dialect::Odin && self.peek() == Some(&Token::ColonAssign) {
+                    self.next();
+                    return Stmt::Let {
+                        name,
+                        ty_hint: None,
+                        is_mut: false,
+                        value: self.parse_expr(),
+                    };
+                }
+                if self.dialect == Dialect::Odin && self.peek() == Some(&Token::Colon) {
+                    self.next();
+                    let ty = self.parse_type_name();
+                    self.expect(Token::Assign);
+                    return Stmt::Let {
+                        name,
+                        ty_hint: Some(ty),
+                        is_mut: false,
+                        value: self.parse_expr(),
+                    };
+                }
                 if self.peek() == Some(&Token::ColonColon) {
                     self.next(); // consume `::`
                     let Some(Token::Ident(member)) = self.next() else {
@@ -1802,6 +1972,10 @@ impl Parser {
 }
 
 pub fn check_diagnostics(src: &str) -> Vec<ParseError> {
+    check_diagnostics_with_dialect(src, Dialect::Rust)
+}
+
+pub fn check_diagnostics_with_dialect(src: &str, dialect: Dialect) -> Vec<ParseError> {
     let mut errors = Vec::new();
 
     // 1. Check lexer errors (unknown characters like `@` or `$`)
@@ -2028,7 +2202,8 @@ fn load_recursive(
 
     let src = std::fs::read_to_string(&canonical)
         .map_err(|e| format!("Could not read '{}': {}", path.display(), e))?;
-    let prog = Parser::new(&src).parse_program();
+    let dialect = detect_dialect_for_path(&canonical);
+    let prog = Parser::new_with_dialect(&src, dialect).parse_program();
 
     let dir = canonical
         .parent()
@@ -2271,4 +2446,48 @@ pub fn merge_open_enums(prog: &mut Program) {
     }
 
     prog.enums = base_enums;
+}
+
+#[cfg(test)]
+mod dialect_tests {
+    use super::*;
+
+    #[test]
+    fn test_rust_to_odin_roundtrip() {
+        let rust_src = r#"
+const LIMIT = 42
+
+enum State {
+    Idle,
+    Active,
+}
+
+struct Ship {
+    hp: int,
+}
+
+fn calc(a: int, b: int) -> int {
+    let mut sum = a + b
+    let doubled : int = sum * 2
+    return doubled
+}
+"#;
+        let prog_rust = Parser::new(rust_src).parse_program();
+        let odin_src = format_program_with_dialect(&prog_rust, Dialect::Odin);
+        assert!(odin_src.contains("LIMIT :: 42"));
+        assert!(odin_src.contains("Ship :: struct {"));
+        assert!(odin_src.contains("calc :: proc(a: int, b: int) -> int {"));
+        assert!(odin_src.contains("mut sum := a + b"));
+        assert!(odin_src.contains("doubled : int = sum * 2"));
+
+        let prog_odin = Parser::new_with_dialect(&odin_src, Dialect::Odin).parse_program();
+        assert_eq!(prog_odin.consts.len(), 1);
+        assert_eq!(prog_odin.enums.len(), 1);
+        assert_eq!(prog_odin.structs.len(), 1);
+        assert_eq!(prog_odin.functions.len(), 1);
+
+        let allman_src = format_program_with_options(&prog_rust, Dialect::Rust, BraceStyle::Allman);
+        assert!(allman_src.contains("fn calc(a: int, b: int) -> int\n{\n"));
+        assert!(allman_src.contains("struct Ship\n{\n"));
+    }
 }
