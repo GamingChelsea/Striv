@@ -28,6 +28,42 @@ fn main() {
                 elapsed, exec_elapsed, res
             );
         }
+        "test" => {
+            let path = args
+                .get(2)
+                .expect("Please provide a file: striv-cli test suite.strv");
+            let compile_start = Instant::now();
+            let prog = striv_syntax::load_program_with_imports(std::path::Path::new(path))
+                .expect("Failed to load program");
+
+            let mut jit = JitCompiler::new();
+            let tests = jit.compile_tests(&prog);
+            let compile_dur = compile_start.elapsed();
+
+            let mut passed = 0;
+            let mut failed = 0;
+            for (name, test_fn) in tests {
+                let _ = lang_runtime::take_assert_failed();
+                let t0 = Instant::now();
+                test_fn();
+                let dur = t0.elapsed();
+                if lang_runtime::take_assert_failed() {
+                    println!("  FAIL  {} ({:?})", name, dur);
+                    failed += 1;
+                } else {
+                    println!("  PASS  {} ({:?})", name, dur);
+                    passed += 1;
+                }
+            }
+            println!("--------------------------------------------------");
+            println!(
+                "{} passed, {} failed (compiled in {:?})",
+                passed, failed, compile_dur
+            );
+            if failed > 0 {
+                std::process::exit(1);
+            }
+        }
         "fmt" => {
             let path = args
                 .get(2)

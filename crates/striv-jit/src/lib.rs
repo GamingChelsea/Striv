@@ -32,6 +32,10 @@ extern "C" fn host_print_struct(data_ptr: *const i64, def_ptr: *const StructDef)
 #[derive(Clone)]
 #[allow(dead_code)]
 enum VarInfo {
+    Bytes {
+        var: Variable,
+        is_mut: bool,
+    },
     Int {
         var: Variable,
         is_mut: bool,
@@ -121,6 +125,19 @@ struct CompileEnv<'a> {
     svec_push_ref: cranelift::codegen::ir::FuncRef,
     svec_get_ptr_ref: cranelift::codegen::ir::FuncRef,
     svec_len_ref: cranelift::codegen::ir::FuncRef,
+    svec_bytes_ptr_ref: cranelift::codegen::ir::FuncRef,
+    svec_byte_len_ref: cranelift::codegen::ir::FuncRef,
+    pack_struct_ref: cranelift::codegen::ir::FuncRef,
+    apply_struct_ref: cranelift::codegen::ir::FuncRef,
+    bytes_len_ref: cranelift::codegen::ir::FuncRef,
+    bytes_write_u32_ref: cranelift::codegen::ir::FuncRef,
+    bytes_write_i64_ref: cranelift::codegen::ir::FuncRef,
+    bytes_write_f64_ref: cranelift::codegen::ir::FuncRef,
+    bytes_read_u32_ref: cranelift::codegen::ir::FuncRef,
+    bytes_read_i64_ref: cranelift::codegen::ir::FuncRef,
+    bytes_read_f64_ref: cranelift::codegen::ir::FuncRef,
+    fn_ret_handles: &'a HashMap<String, String>,
+    sync_layouts: &'a HashMap<String, usize>,
     svec_clear_ref: cranelift::codegen::ir::FuncRef,
     group_begin_ref: cranelift::codegen::ir::FuncRef,
     group_spawn_ref: cranelift::codegen::ir::FuncRef,
@@ -136,6 +153,9 @@ struct CompileEnv<'a> {
     par_helpers: &'a HashMap<String, (String, Vec<String>)>,
     current_fn: &'a str,
     deferred: Vec<Stmt>,
+    fn_ret_structs: &'a HashMap<String, Option<String>>,
+    ret_struct_ptr: Option<(Variable, String)>,
+    loop_targets: Vec<(Block, Block)>,
     literals: &'a mut Vec<Box<[u8]>>,
     user_enums: &'a HashMap<String, i64>,
     enum_defs: &'a HashMap<String, striv_syntax::EnumDef>,
@@ -148,19 +168,27 @@ pub struct JitCompiler {
     // Box keeps the StructDef memory address stable for host_print_struct
     kept_structs: HashMap<String, Box<StructDef>>,
     kept_literals: Vec<Box<[u8]>>,
+    pub compiled_fns: HashMap<String, *const u8>,
+}
+
+fn cached_isa() -> std::sync::Arc<dyn cranelift::codegen::isa::TargetIsa> {
+    static ISA: std::sync::OnceLock<std::sync::Arc<dyn cranelift::codegen::isa::TargetIsa>> =
+        std::sync::OnceLock::new();
+    ISA.get_or_init(|| {
+        let mut flag_builder = settings::builder();
+        flag_builder.set("use_colocated_libcalls", "false").unwrap();
+        flag_builder.set("is_pic", "false").unwrap();
+        cranelift_native::builder()
+            .unwrap()
+            .finish(settings::Flags::new(flag_builder))
+            .unwrap()
+    })
+    .clone()
 }
 
 impl JitCompiler {
     pub fn new() -> Self {
-        let mut flag_builder = settings::builder();
-        flag_builder.set("use_colocated_libcalls", "false").unwrap();
-        flag_builder.set("is_pic", "false").unwrap();
-        let isa = cranelift_native::builder()
-            .unwrap()
-            .finish(settings::Flags::new(flag_builder))
-            .unwrap();
-
-        let mut builder = JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
+        let mut builder = JITBuilder::with_isa(cached_isa(), cranelift_module::default_libcall_names());
         builder.symbol("host_print_int", host_print_int as *const u8);
         builder.symbol("host_print_struct", host_print_struct as *const u8);
         builder.symbol("striv_str_new", lang_runtime::striv_str_new as *const u8);
@@ -206,6 +234,29 @@ impl JitCompiler {
         );
         builder.symbol("striv_svec_len", lang_runtime::striv_svec_len as *const u8);
         builder.symbol(
+            "striv_svec_as_bytes_ptr",
+            lang_runtime::striv_svec_as_bytes_ptr as *const u8,
+        );
+        builder.symbol(
+            "striv_svec_byte_len",
+            lang_runtime::striv_svec_byte_len as *const u8,
+        );
+        builder.symbol(
+            "striv_pack_struct",
+            lang_runtime::striv_pack_struct as *const u8,
+        );
+        builder.symbol(
+            "striv_apply_struct",
+            lang_runtime::striv_apply_struct as *const u8,
+        );
+        builder.symbol("striv_bytes_len", lang_runtime::striv_bytes_len as *const u8);
+        builder.symbol("striv_bytes_write_u32", lang_runtime::striv_bytes_write_u32 as *const u8);
+        builder.symbol("striv_bytes_write_i64", lang_runtime::striv_bytes_write_i64 as *const u8);
+        builder.symbol("striv_bytes_write_f64", lang_runtime::striv_bytes_write_f64 as *const u8);
+        builder.symbol("striv_bytes_read_u32", lang_runtime::striv_bytes_read_u32 as *const u8);
+        builder.symbol("striv_bytes_read_i64", lang_runtime::striv_bytes_read_i64 as *const u8);
+        builder.symbol("striv_bytes_read_f64", lang_runtime::striv_bytes_read_f64 as *const u8);
+        builder.symbol(
             "striv_svec_clear",
             lang_runtime::striv_svec_clear as *const u8,
         );
@@ -241,6 +292,12 @@ impl JitCompiler {
             "striv_shared_free",
             lang_runtime::striv_shared_free as *const u8,
         );
+        builder.symbol("striv_assert", lang_runtime::striv_assert as *const u8);
+        builder.symbol("striv_sin", lang_runtime::striv_sin as *const u8);
+        builder.symbol("striv_cos", lang_runtime::striv_cos as *const u8);
+        builder.symbol("striv_tan", lang_runtime::striv_tan as *const u8);
+        builder.symbol("striv_atan2", lang_runtime::striv_atan2 as *const u8);
+        builder.symbol("striv_sqrt", lang_runtime::striv_sqrt as *const u8);
         builder.symbol(
             "striv_par_for_svec",
             lang_runtime::striv_par_for_svec as *const u8,
@@ -267,11 +324,27 @@ impl JitCompiler {
             module: JITModule::new(builder),
             kept_structs: HashMap::new(),
             kept_literals: Vec::new(),
+            compiled_fns: HashMap::new(),
         }
     }
 
     pub fn compile_program(&mut self, prog: &Program) -> *const u8 {
+        let mut sync_layouts: HashMap<String, usize> = HashMap::new();
         for s in &prog.structs {
+            if s.sync_mask != 0 {
+                let mut layout = Vec::with_capacity(3 + s.fields.len() * 2);
+                layout.push(s.fields.len() as u32);
+                layout.push(s.sync_mask as u32);
+                layout.push((s.sync_mask >> 32) as u32);
+                for (f_name, f_ty) in &s.fields {
+                    let off = field_offset(s, f_name) as u32;
+                    let (sz, _) = field_type_info(f_ty);
+                    layout.push(off);
+                    layout.push(sz);
+                }
+                let leaked = Box::leak(layout.into_boxed_slice());
+                sync_layouts.insert(s.name.clone(), leaked.as_ptr() as usize);
+            }
             self.kept_structs
                 .insert(s.name.clone(), Box::new(s.clone()));
         }
@@ -407,6 +480,67 @@ impl JitCompiler {
             .module
             .declare_function("striv_svec_len", Linkage::Import, &sig_tweak_str)
             .unwrap();
+        let svec_bytes_ptr_id = self
+            .module
+            .declare_function("striv_svec_as_bytes_ptr", Linkage::Import, &sig_tweak_str)
+            .unwrap();
+        let svec_byte_len_id = self
+            .module
+            .declare_function("striv_svec_byte_len", Linkage::Import, &sig_tweak_str)
+            .unwrap();
+        let mut sig_3i = self.module.make_signature();
+        for _ in 0..3 {
+            sig_3i.params.push(AbiParam::new(int_ty));
+        }
+        sig_3i.returns.push(AbiParam::new(int_ty));
+        let pack_struct_id = self
+            .module
+            .declare_function("striv_pack_struct", Linkage::Import, &sig_3i)
+            .unwrap();
+        let apply_struct_id = self
+            .module
+            .declare_function("striv_apply_struct", Linkage::Import, &sig_3i)
+            .unwrap();
+        let bytes_len_id = self
+            .module
+            .declare_function("striv_bytes_len", Linkage::Import, &sig_tweak_str)
+            .unwrap();
+        let mut sig_ii_i = self.module.make_signature();
+        sig_ii_i.params.push(AbiParam::new(int_ty));
+        sig_ii_i.params.push(AbiParam::new(int_ty));
+        sig_ii_i.returns.push(AbiParam::new(int_ty));
+        let bytes_write_u32_id = self
+            .module
+            .declare_function("striv_bytes_write_u32", Linkage::Import, &sig_ii_i)
+            .unwrap();
+        let bytes_write_i64_id = self
+            .module
+            .declare_function("striv_bytes_write_i64", Linkage::Import, &sig_ii_i)
+            .unwrap();
+        let mut sig_if_i = self.module.make_signature();
+        sig_if_i.params.push(AbiParam::new(int_ty));
+        sig_if_i.params.push(AbiParam::new(types::F64));
+        sig_if_i.returns.push(AbiParam::new(int_ty));
+        let bytes_write_f64_id = self
+            .module
+            .declare_function("striv_bytes_write_f64", Linkage::Import, &sig_if_i)
+            .unwrap();
+        let bytes_read_u32_id = self
+            .module
+            .declare_function("striv_bytes_read_u32", Linkage::Import, &sig_ii_i)
+            .unwrap();
+        let bytes_read_i64_id = self
+            .module
+            .declare_function("striv_bytes_read_i64", Linkage::Import, &sig_ii_i)
+            .unwrap();
+        let mut sig_ii_f = self.module.make_signature();
+        sig_ii_f.params.push(AbiParam::new(int_ty));
+        sig_ii_f.params.push(AbiParam::new(int_ty));
+        sig_ii_f.returns.push(AbiParam::new(types::F64));
+        let bytes_read_f64_id = self
+            .module
+            .declare_function("striv_bytes_read_f64", Linkage::Import, &sig_ii_f)
+            .unwrap();
         let svec_clear_id = self
             .module
             .declare_function("striv_svec_clear", Linkage::Import, &sig_tweak_str)
@@ -458,6 +592,37 @@ impl JitCompiler {
             .module
             .declare_function("striv_select_recv", Linkage::Import, &sig_sel)
             .unwrap();
+        let assert_id = self
+            .module
+            .declare_function("striv_assert", Linkage::Import, &sig_tweak_str)
+            .unwrap();
+        let mut sig_f1 = self.module.make_signature();
+        sig_f1.params.push(AbiParam::new(types::F64));
+        sig_f1.returns.push(AbiParam::new(types::F64));
+        let sin_id = self
+            .module
+            .declare_function("striv_sin", Linkage::Import, &sig_f1)
+            .unwrap();
+        let cos_id = self
+            .module
+            .declare_function("striv_cos", Linkage::Import, &sig_f1)
+            .unwrap();
+        let tan_id = self
+            .module
+            .declare_function("striv_tan", Linkage::Import, &sig_f1)
+            .unwrap();
+        let sqrt_id = self
+            .module
+            .declare_function("striv_sqrt", Linkage::Import, &sig_f1)
+            .unwrap();
+        let mut sig_f2 = self.module.make_signature();
+        sig_f2.params.push(AbiParam::new(types::F64));
+        sig_f2.params.push(AbiParam::new(types::F64));
+        sig_f2.returns.push(AbiParam::new(types::F64));
+        let atan2_id = self
+            .module
+            .declare_function("striv_atan2", Linkage::Import, &sig_f2)
+            .unwrap();
 
         let set_err_id = self
             .module
@@ -489,8 +654,25 @@ impl JitCompiler {
 
         // 1. Pre-register all functions so they can call each other
         let mut func_ids = Vec::new();
+        let mut fn_ret_structs: HashMap<String, Option<String>> = HashMap::new();
+        let mut fn_ret_handles: HashMap<String, String> = HashMap::new();
         for func in &all_functions {
+            let ret_struct = func
+                .ret_type
+                .as_ref()
+                .filter(|rt| self.kept_structs.contains_key(*rt))
+                .cloned();
+            fn_ret_structs.insert(func.name.clone(), ret_struct.clone());
+            if let Some(rt) = &func.ret_type {
+                if rt == "Bytes" {
+                    fn_ret_handles.insert(func.name.clone(), rt.clone());
+                }
+            }
+
             let mut sig = self.module.make_signature();
+            if ret_struct.is_some() {
+                sig.params.push(AbiParam::new(int_ty)); // hidden __ret_ptr
+            }
             for (_, p_ty, _) in &func.params {
                 let abi_ty = if p_ty == "float" { types::F64 } else { int_ty };
                 sig.params.push(AbiParam::new(abi_ty)); // Integer, float, or 8-byte struct pointer
@@ -511,7 +693,11 @@ impl JitCompiler {
         // 2. Compile each function with Cranelift
         let mut func_ctx = FunctionBuilderContext::new();
         for (i, func) in all_functions.iter().enumerate() {
+            let ret_struct = fn_ret_structs.get(&func.name).cloned().flatten();
             let mut ctx = self.module.make_context();
+            if ret_struct.is_some() {
+                ctx.func.signature.params.push(AbiParam::new(int_ty));
+            }
             for (_, p_ty, _) in &func.params {
                 let abi_ty = if p_ty == "float" { types::F64 } else { int_ty };
                 ctx.func.signature.params.push(AbiParam::new(abi_ty));
@@ -536,6 +722,24 @@ impl JitCompiler {
                     let param_meta = f.params.iter().map(|(_, ty, m)| (ty.clone(), *m)).collect();
                     funcs_map.insert(f.name.clone(), (f_ref, param_meta));
                 }
+                let assert_ref = self.module.declare_func_in_func(assert_id, builder.func);
+                funcs_map.insert("assert".to_string(), (assert_ref, vec![("int".into(), false)]));
+                let sin_ref = self.module.declare_func_in_func(sin_id, builder.func);
+                funcs_map.insert("sin".to_string(), (sin_ref, vec![("float".into(), false)]));
+                let cos_ref = self.module.declare_func_in_func(cos_id, builder.func);
+                funcs_map.insert("cos".to_string(), (cos_ref, vec![("float".into(), false)]));
+                let tan_ref = self.module.declare_func_in_func(tan_id, builder.func);
+                funcs_map.insert("tan".to_string(), (tan_ref, vec![("float".into(), false)]));
+                let sqrt_ref = self.module.declare_func_in_func(sqrt_id, builder.func);
+                funcs_map.insert("sqrt".to_string(), (sqrt_ref, vec![("float".into(), false)]));
+                let atan2_ref = self.module.declare_func_in_func(atan2_id, builder.func);
+                funcs_map.insert(
+                    "atan2".to_string(),
+                    (
+                        atan2_ref,
+                        vec![("float".into(), false), ("float".into(), false)],
+                    ),
+                );
                 for &(striv_name, c_sym, _, sig_str) in
                     lang_runtime::generated_bridge::exported_symbols()
                 {
@@ -602,6 +806,54 @@ impl JitCompiler {
                     }
                     funcs_map.insert(s_name.replace("::", "__"), (std_ref, param_types));
                 }
+                funcs_map.insert(
+                    "Bytes__write_u32".into(),
+                    (
+                        self.module
+                            .declare_func_in_func(bytes_write_u32_id, builder.func),
+                        vec![("int".into(), false), ("int".into(), false)],
+                    ),
+                );
+                funcs_map.insert(
+                    "Bytes__write_i64".into(),
+                    (
+                        self.module
+                            .declare_func_in_func(bytes_write_i64_id, builder.func),
+                        vec![("int".into(), false), ("int".into(), false)],
+                    ),
+                );
+                funcs_map.insert(
+                    "Bytes__write_f64".into(),
+                    (
+                        self.module
+                            .declare_func_in_func(bytes_write_f64_id, builder.func),
+                        vec![("int".into(), false), ("float".into(), false)],
+                    ),
+                );
+                funcs_map.insert(
+                    "Bytes__read_u32".into(),
+                    (
+                        self.module
+                            .declare_func_in_func(bytes_read_u32_id, builder.func),
+                        vec![("int".into(), false), ("int".into(), false)],
+                    ),
+                );
+                funcs_map.insert(
+                    "Bytes__read_i64".into(),
+                    (
+                        self.module
+                            .declare_func_in_func(bytes_read_i64_id, builder.func),
+                        vec![("int".into(), false), ("int".into(), false)],
+                    ),
+                );
+                funcs_map.insert(
+                    "Bytes__read_f64".into(),
+                    (
+                        self.module
+                            .declare_func_in_func(bytes_read_f64_id, builder.func),
+                        vec![("int".into(), false), ("int".into(), false)],
+                    ),
+                );
 
                 let mut env = CompileEnv {
                     int_ty,
@@ -641,6 +893,41 @@ impl JitCompiler {
                         .module
                         .declare_func_in_func(svec_get_ptr_id, builder.func),
                     svec_len_ref: self.module.declare_func_in_func(svec_len_id, builder.func),
+                    svec_bytes_ptr_ref: self
+                        .module
+                        .declare_func_in_func(svec_bytes_ptr_id, builder.func),
+                    svec_byte_len_ref: self
+                        .module
+                        .declare_func_in_func(svec_byte_len_id, builder.func),
+                    pack_struct_ref: self
+                        .module
+                        .declare_func_in_func(pack_struct_id, builder.func),
+                    apply_struct_ref: self
+                        .module
+                        .declare_func_in_func(apply_struct_id, builder.func),
+                    bytes_len_ref: self
+                        .module
+                        .declare_func_in_func(bytes_len_id, builder.func),
+                    bytes_write_u32_ref: self
+                        .module
+                        .declare_func_in_func(bytes_write_u32_id, builder.func),
+                    bytes_write_i64_ref: self
+                        .module
+                        .declare_func_in_func(bytes_write_i64_id, builder.func),
+                    bytes_write_f64_ref: self
+                        .module
+                        .declare_func_in_func(bytes_write_f64_id, builder.func),
+                    bytes_read_u32_ref: self
+                        .module
+                        .declare_func_in_func(bytes_read_u32_id, builder.func),
+                    bytes_read_i64_ref: self
+                        .module
+                        .declare_func_in_func(bytes_read_i64_id, builder.func),
+                    bytes_read_f64_ref: self
+                        .module
+                        .declare_func_in_func(bytes_read_f64_id, builder.func),
+                    fn_ret_handles: &fn_ret_handles,
+                    sync_layouts: &sync_layouts,
                     svec_clear_ref: self
                         .module
                         .declare_func_in_func(svec_clear_id, builder.func),
@@ -676,6 +963,9 @@ impl JitCompiler {
                     par_helpers: &par_helpers,
                     current_fn: &func.name,
                     deferred: Vec::new(),
+                    fn_ret_structs: &fn_ret_structs,
+                    ret_struct_ptr: None,
+                    loop_targets: Vec::new(),
                     literals: &mut self.kept_literals,
                     user_enums: &user_enums,
                     enum_defs: &enum_defs,
@@ -684,6 +974,15 @@ impl JitCompiler {
                 };
 
                 let mut vars: HashMap<String, VarInfo> = HashMap::new();
+                let param_offset = if let Some(rs_name) = &ret_struct {
+                    let rp_var = builder.declare_var(int_ty);
+                    let rp_val = builder.block_params(entry)[0];
+                    builder.def_var(rp_var, rp_val);
+                    env.ret_struct_ptr = Some((rp_var, rs_name.clone()));
+                    1
+                } else {
+                    0
+                };
                 for (idx, (name, ty_name, is_mut)) in func.params.iter().enumerate() {
                     let var_ty = if ty_name == "float" {
                         types::F64
@@ -691,7 +990,7 @@ impl JitCompiler {
                         int_ty
                     };
                     let var = builder.declare_var(var_ty);
-                    let val = builder.block_params(entry)[idx];
+                    let val = builder.block_params(entry)[idx + param_offset];
                     builder.def_var(var, val);
                     if ty_name == "String" {
                         vars.insert(
@@ -844,35 +1143,166 @@ impl JitCompiler {
         }
 
         self.module.finalize_definitions().unwrap();
+        for (idx, func) in all_functions.iter().enumerate() {
+            let ptr = self.module.get_finalized_function(func_ids[idx]);
+            self.compiled_fns.insert(func.name.clone(), ptr);
+        }
         let entry_idx = all_functions
             .iter()
             .position(|f| f.name == "main")
             .unwrap_or(func_ids.len() - 1);
         self.module.get_finalized_function(func_ids[entry_idx])
     }
+
+    pub fn compile_tests(&mut self, base_prog: &Program) -> Vec<(String, fn() -> i64)> {
+        let mut prog = base_prog.clone();
+        let mut test_names = Vec::new();
+        for (i, (t_name, t_body)) in prog.tests.drain(..).enumerate() {
+            let fn_name = format!("__striv_test_{}", i);
+            test_names.push((t_name, fn_name.clone()));
+            prog.functions.push(striv_syntax::Function {
+                name: fn_name,
+                is_rpc: false,
+                type_params: Vec::new(),
+                params: Vec::new(),
+                ret_type: Some("int".to_string()),
+                body: t_body,
+            });
+        }
+        let _ = self.compile_program(&prog);
+        test_names
+            .into_iter()
+            .map(|(label, fn_name)| {
+                let ptr = self.compiled_fns[&fn_name];
+                let f: fn() -> i64 = unsafe { std::mem::transmute(ptr) };
+                (label, f)
+            })
+            .collect()
+    }
 }
 
 // Helper: computes the byte offset of a field (field 0 -> 0, field 1 -> 8, ...)
+fn field_type_info(ty: &str) -> (u32, u32) {
+    match ty {
+        "f32" | "u32" | "i32" => (4, 4),
+        "u8" | "i8" | "bool" => (1, 1),
+        _ => (8, 8),
+    }
+}
+
+fn struct_byte_size(def: &StructDef) -> u32 {
+    let mut offset = if def.sync_mask != 0 { 8u32 } else { 0u32 };
+    let mut max_align = if def.sync_mask != 0 { 8u32 } else { 1u32 };
+    for (_, ty) in &def.fields {
+        let (size, align) = field_type_info(ty);
+        max_align = max_align.max(align);
+        offset = (offset + align - 1) & !(align - 1);
+        offset += size;
+    }
+    ((offset + max_align - 1) & !(max_align - 1)).max(1)
+}
+
 fn field_offset(def: &StructDef, field: &str) -> i32 {
-    let idx = def
-        .fields
+    let mut offset = if def.sync_mask != 0 { 8u32 } else { 0u32 };
+    for (f, ty) in &def.fields {
+        let (size, align) = field_type_info(ty);
+        offset = (offset + align - 1) & !(align - 1);
+        if f == field {
+            return offset as i32;
+        }
+        offset += size;
+    }
+    panic!("Unknown field '{}' in struct '{}'", field, def.name);
+}
+
+fn field_type<'a>(def: &'a StructDef, field: &str) -> &'a str {
+    def.fields
         .iter()
-        .position(|(f, _)| f == field)
-        .unwrap_or_else(|| panic!("Unknown field '{}' in struct '{}'", field, def.name));
-    (idx * 8) as i32
+        .find(|(f, _)| f == field)
+        .map(|(_, ty)| ty.as_str())
+        .unwrap_or("int")
+}
+
+fn store_struct_field(
+    builder: &mut FunctionBuilder,
+    val: Value,
+    ptr: Value,
+    offset: i32,
+    field_ty: &str,
+) {
+    match field_ty {
+        "f32" => {
+            let f = to_f64(val, builder);
+            let f32v = builder.ins().fdemote(types::F32, f);
+            builder.ins().store(MemFlagsData::new(), f32v, ptr, offset);
+        }
+        "u32" | "i32" => {
+            let i32v = builder.ins().ireduce(types::I32, val);
+            builder.ins().store(MemFlagsData::new(), i32v, ptr, offset);
+        }
+        "u8" | "i8" | "bool" => {
+            let i8v = if builder.func.dfg.value_type(val) == types::I8 {
+                val
+            } else {
+                builder.ins().ireduce(types::I8, val)
+            };
+            builder.ins().store(MemFlagsData::new(), i8v, ptr, offset);
+        }
+        "float" => {
+            let f = to_f64(val, builder);
+            builder.ins().store(MemFlagsData::new(), f, ptr, offset);
+        }
+        _ => {
+            builder.ins().store(MemFlagsData::new(), val, ptr, offset);
+        }
+    }
+}
+
+fn load_struct_field(
+    builder: &mut FunctionBuilder,
+    ptr: Value,
+    offset: i32,
+    field_ty: &str,
+    int_ty: Type,
+) -> Value {
+    match field_ty {
+        "f32" => {
+            let f32v = builder.ins().load(types::F32, MemFlagsData::new(), ptr, offset);
+            builder.ins().fpromote(types::F64, f32v)
+        }
+        "u32" => {
+            let i32v = builder.ins().load(types::I32, MemFlagsData::new(), ptr, offset);
+            builder.ins().uextend(int_ty, i32v)
+        }
+        "i32" => {
+            let i32v = builder.ins().load(types::I32, MemFlagsData::new(), ptr, offset);
+            builder.ins().sextend(int_ty, i32v)
+        }
+        "u8" | "bool" => {
+            let i8v = builder.ins().load(types::I8, MemFlagsData::new(), ptr, offset);
+            builder.ins().uextend(int_ty, i8v)
+        }
+        "i8" => {
+            let i8v = builder.ins().load(types::I8, MemFlagsData::new(), ptr, offset);
+            builder.ins().sextend(int_ty, i8v)
+        }
+        "float" => builder.ins().load(types::F64, MemFlagsData::new(), ptr, offset),
+        _ => builder.ins().load(int_ty, MemFlagsData::new(), ptr, offset),
+    }
 }
 
 fn field_is_float(def: &StructDef, field: &str) -> bool {
     def.fields
         .iter()
         .find(|(f, _)| f == field)
-        .map(|(_, ty)| ty == "float")
+        .map(|(_, ty)| ty == "float" || ty == "f32")
         .unwrap_or(false)
 }
 
 fn is_float_expr(expr: &Expr, vars: &HashMap<String, VarInfo>, env: &CompileEnv) -> bool {
     match expr {
         Expr::Float(_) => true,
+        Expr::MethodCall { method, .. } if method == "read_f64" => true,
         Expr::Var(n) => matches!(vars.get(n), Some(VarInfo::Float { .. })),
         Expr::FieldAccess { var, field } => match vars.get(var) {
             Some(VarInfo::Struct { struct_name, .. })
@@ -915,8 +1345,20 @@ fn compile_call(
         "Wrong number of arguments for '{}'",
         name
     );
-
     let mut arg_vals = Vec::new();
+    let ret_slot = if let Some(Some(rs_name)) = env.fn_ret_structs.get(name) {
+        let def = env.structs.get(rs_name).unwrap();
+        let slot = builder.create_sized_stack_slot(StackSlotData::new(
+            StackSlotKind::ExplicitSlot,
+            struct_byte_size(def),
+            3,
+        ));
+        arg_vals.push(builder.ins().stack_addr(env.int_ty, slot, 0));
+        Some(slot)
+    } else {
+        None
+    };
+
     let mut mut_borrowed = Vec::new();
 
     for (i, arg) in args.iter().enumerate() {
@@ -970,12 +1412,18 @@ fn compile_call(
             val = to_f64(val, builder);
         } else if builder.func.dfg.value_type(val) == types::F64 {
             val = builder.ins().fcvt_to_sint_sat(env.int_ty, val);
+        } else if builder.func.dfg.value_type(val) == types::I8 {
+            val = builder.ins().uextend(env.int_ty, val);
         }
         arg_vals.push(val);
     }
 
     let call = builder.ins().call(func_ref, &arg_vals);
-    builder.inst_results(call)[0]
+    if let Some(slot) = ret_slot {
+        builder.ins().stack_addr(env.int_ty, slot, 0)
+    } else {
+        builder.inst_results(call)[0]
+    }
 }
 
 fn compile_method_call(
@@ -986,6 +1434,108 @@ fn compile_method_call(
     vars: &HashMap<String, VarInfo>,
     env: &mut CompileEnv,
 ) -> Value {
+    if matches!(
+        method,
+        "is_dirty" | "clear_dirty" | "pack_delta" | "pack_full" | "apply_delta"
+    ) {
+        let (base_ptr, struct_name) = match vars.get(receiver) {
+            Some(VarInfo::Struct {
+                slot, struct_name, ..
+            }) => (
+                builder.ins().stack_addr(env.int_ty, *slot, 0),
+                struct_name.clone(),
+            ),
+            Some(VarInfo::StructPtr {
+                ptr_var,
+                struct_name,
+                ..
+            }) => (builder.use_var(*ptr_var), struct_name.clone()),
+            _ => panic!("'{}' is not a struct for .{}()", receiver, method),
+        };
+        let layout_addr = *env
+            .sync_layouts
+            .get(&struct_name)
+            .unwrap_or_else(|| panic!("Struct '{}' has no `sync` fields", struct_name));
+        let layout_ptr = builder.ins().iconst(env.int_ty, layout_addr as i64);
+        return match method {
+            "is_dirty" => {
+                let mask = builder
+                    .ins()
+                    .load(env.int_ty, MemFlagsData::new(), base_ptr, 0);
+                let b = builder.ins().icmp_imm(IntCC::NotEqual, mask, 0);
+                builder.ins().uextend(env.int_ty, b)
+            }
+            "clear_dirty" => {
+                let zero = builder.ins().iconst(env.int_ty, 0);
+                builder.ins().store(MemFlagsData::new(), zero, base_ptr, 0);
+                zero
+            }
+            "pack_delta" => {
+                let full = builder.ins().iconst(env.int_ty, 0);
+                let c = builder
+                    .ins()
+                    .call(env.pack_struct_ref, &[base_ptr, layout_ptr, full]);
+                builder.inst_results(c)[0]
+            }
+            "pack_full" => {
+                let full = builder.ins().iconst(env.int_ty, 1);
+                let c = builder
+                    .ins()
+                    .call(env.pack_struct_ref, &[base_ptr, layout_ptr, full]);
+                builder.inst_results(c)[0]
+            }
+            "apply_delta" => {
+                let pkt = compile_expr(&args[0], builder, vars, env);
+                let c = builder
+                    .ins()
+                    .call(env.apply_struct_ref, &[base_ptr, layout_ptr, pkt]);
+                builder.inst_results(c)[0]
+            }
+            _ => unreachable!(),
+        };
+    }
+
+    if let Some(VarInfo::Bytes { var, .. }) = vars.get(receiver).cloned() {
+        let b_ptr = builder.use_var(var);
+        return match method {
+            "len" => {
+                let c = builder.ins().call(env.bytes_len_ref, &[b_ptr]);
+                builder.inst_results(c)[0]
+            }
+            "write_u32" => {
+                let v = compile_expr(&args[0], builder, vars, env);
+                let c = builder.ins().call(env.bytes_write_u32_ref, &[b_ptr, v]);
+                builder.inst_results(c)[0]
+            }
+            "write_i64" => {
+                let v = compile_expr(&args[0], builder, vars, env);
+                let c = builder.ins().call(env.bytes_write_i64_ref, &[b_ptr, v]);
+                builder.inst_results(c)[0]
+            }
+            "write_f64" => {
+                let v = to_f64(compile_expr(&args[0], builder, vars, env), builder);
+                let c = builder.ins().call(env.bytes_write_f64_ref, &[b_ptr, v]);
+                builder.inst_results(c)[0]
+            }
+            "read_u32" => {
+                let off = compile_expr(&args[0], builder, vars, env);
+                let c = builder.ins().call(env.bytes_read_u32_ref, &[b_ptr, off]);
+                builder.inst_results(c)[0]
+            }
+            "read_i64" => {
+                let off = compile_expr(&args[0], builder, vars, env);
+                let c = builder.ins().call(env.bytes_read_i64_ref, &[b_ptr, off]);
+                builder.inst_results(c)[0]
+            }
+            "read_f64" => {
+                let off = compile_expr(&args[0], builder, vars, env);
+                let c = builder.ins().call(env.bytes_read_f64_ref, &[b_ptr, off]);
+                builder.inst_results(c)[0]
+            }
+            _ => panic!("Unknown method '.{}()' on Bytes", method),
+        };
+    }
+
     if let Some(VarInfo::StructVec {
         var,
         struct_name,
@@ -996,6 +1546,14 @@ fn compile_method_call(
         return match method {
             "len" => {
                 let c = builder.ins().call(env.svec_len_ref, &[vec_ptr]);
+                builder.inst_results(c)[0]
+            }
+            "as_bytes_ptr" => {
+                let c = builder.ins().call(env.svec_bytes_ptr_ref, &[vec_ptr]);
+                builder.inst_results(c)[0]
+            }
+            "byte_len" => {
+                let c = builder.ins().call(env.svec_byte_len_ref, &[vec_ptr]);
                 builder.inst_results(c)[0]
             }
             "clear" => {
@@ -1019,16 +1577,20 @@ fn compile_method_call(
                         let def = env.structs.get(s_name).unwrap().clone();
                         let slot = builder.create_sized_stack_slot(StackSlotData::new(
                             StackSlotKind::ExplicitSlot,
-                            (def.fields.len() * 8) as u32,
+                            struct_byte_size(&def),
                             3,
                         ));
-                        for (f_name, f_expr) in fields {
-                            let mut v = compile_expr(f_expr, builder, vars, env);
-                            if field_is_float(&def, f_name) {
-                                v = to_f64(v, builder);
-                            }
+                        if def.sync_mask != 0 {
+                    let base = builder.ins().stack_addr(env.int_ty, slot, 0);
+                    let zero = builder.ins().iconst(env.int_ty, 0);
+                    builder.ins().store(MemFlagsData::new(), zero, base, 0);
+                }
+                for (f_name, f_expr) in fields {
+                            let v = compile_expr(f_expr, builder, vars, env);
                             let off = field_offset(&def, f_name);
-                            builder.ins().stack_store(env.int_ty, v, slot, off);
+                            let f_ty = field_type(&def, f_name);
+                            let base = builder.ins().stack_addr(env.int_ty, slot, 0);
+                            store_struct_field(builder, v, base, off, f_ty);
                         }
                         builder.ins().stack_addr(env.int_ty, slot, 0)
                     }
@@ -1187,7 +1749,7 @@ fn compile_stmt(
                     .structs
                     .get(inner_s)
                     .unwrap_or_else(|| panic!("Unknown struct in Vec<{}>", inner_s));
-                let elem_bytes = (def.fields.len() * 8) as i64;
+                let elem_bytes = struct_byte_size(&def) as i64;
                 let size_val = builder.ins().iconst(env.int_ty, elem_bytes);
                 let call = builder.ins().call(env.svec_new_ref, &[size_val]);
                 let ptr = builder.inst_results(call)[0];
@@ -1213,7 +1775,7 @@ fn compile_stmt(
                     .structs
                     .get(s_name)
                     .unwrap_or_else(|| panic!("Unknown struct: {}", s_name));
-                let byte_size = (def.fields.len() * 8) as u32;
+                let byte_size = struct_byte_size(def);
 
                 let slot = builder.create_sized_stack_slot(StackSlotData::new(
                     StackSlotKind::ExplicitSlot,
@@ -1221,13 +1783,17 @@ fn compile_stmt(
                     3, // Alignment 2^3 = 8 Bytes
                 ));
 
+                if def.sync_mask != 0 {
+                    let base = builder.ins().stack_addr(env.int_ty, slot, 0);
+                    let zero = builder.ins().iconst(env.int_ty, 0);
+                    builder.ins().store(MemFlagsData::new(), zero, base, 0);
+                }
                 for (f_name, f_expr) in fields {
-                    let mut val = compile_expr(f_expr, builder, vars, env);
-                    if field_is_float(def, f_name) {
-                        val = to_f64(val, builder);
-                    }
+                    let val = compile_expr(f_expr, builder, vars, env);
                     let offset = field_offset(def, f_name);
-                    builder.ins().stack_store(env.int_ty, val, slot, offset);
+                    let f_ty = field_type(def, f_name);
+                    let base = builder.ins().stack_addr(env.int_ty, slot, 0);
+                    store_struct_field(builder, val, base, offset, f_ty);
                 }
 
                 vars.insert(
@@ -1359,7 +1925,19 @@ fn compile_stmt(
                         is_mut: *is_mut,
                     },
                 );
-            } else if matches!(value, Expr::Call { name, .. } if name.contains("__")) {
+            } else if let Some(rs_name) = expr_struct_type(value, vars, env) {
+                let ptr = compile_expr(value, builder, vars, env);
+                let var = builder.declare_var(env.int_ty);
+                builder.def_var(var, ptr);
+                vars.insert(
+                    name.clone(),
+                    VarInfo::StructPtr {
+                        ptr_var: var,
+                        struct_name: rs_name,
+                        is_mut: *is_mut,
+                    },
+                );
+            } else if matches!(value, Expr::Call { name, .. } if name.contains("__") && !name.contains("__G_")) {
                 let Expr::Call { name: fn_name, .. } = value else {
                     unreachable!()
                 };
@@ -1375,6 +1953,19 @@ fn compile_stmt(
                         is_mut: *is_mut,
                     },
                 );
+            } else if matches!(value, Expr::MethodCall { method, .. } if method == "pack_delta" || method == "pack_full")
+                || matches!(value, Expr::Call { name, .. } if name == "Bytes__new" || name == "Bytes::new" || env.fn_ret_handles.get(name).map(|s| s == "Bytes").unwrap_or(false))
+            {
+                let val = compile_expr(value, builder, vars, env);
+                let var = builder.declare_var(env.int_ty);
+                builder.def_var(var, val);
+                vars.insert(
+                    name.clone(),
+                    VarInfo::Bytes {
+                        var,
+                        is_mut: *is_mut,
+                    },
+                );
             } else if is_float_expr(value, vars, env) {
                 let val = to_f64(compile_expr(value, builder, vars, env), builder);
                 let var = builder.declare_var(types::F64);
@@ -1387,15 +1978,23 @@ fn compile_stmt(
                     },
                 );
             } else {
-                // Case B: Regular integer
+                // Case B: Regular integer or float-returning call
                 let val = compile_expr(value, builder, vars, env);
-                let var = builder.declare_var(env.int_ty);
+                let is_f = builder.func.dfg.value_type(val) == types::F64;
+                let var = builder.declare_var(if is_f { types::F64 } else { env.int_ty });
                 builder.def_var(var, val);
                 vars.insert(
                     name.clone(),
-                    VarInfo::Int {
-                        var,
-                        is_mut: *is_mut,
+                    if is_f {
+                        VarInfo::Float {
+                            var,
+                            is_mut: *is_mut,
+                        }
+                    } else {
+                        VarInfo::Int {
+                            var,
+                            is_mut: *is_mut,
+                        }
                     },
                 );
             }
@@ -1434,11 +2033,25 @@ fn compile_stmt(
                 }) => {
                     assert!(is_mut, "Error: '{}' is not `mut`!", var);
                     let def = env.structs.get(&struct_name).unwrap();
-                    if field_is_float(def, field) {
-                        val = to_f64(val, builder);
-                    }
                     let offset = field_offset(def, field);
-                    builder.ins().stack_store(env.int_ty, val, slot, offset);
+                    let f_ty = field_type(def, field);
+                    let base = builder.ins().stack_addr(env.int_ty, slot, 0);
+                    if let Some(fi) = def.fields.iter().position(|(f, _)| f == field) {
+                        if fi < 64 && (def.sync_mask & (1u64 << fi)) != 0 {
+                            let old_v = load_struct_field(builder, base, offset, f_ty, env.int_ty);
+                            let changed = if f_ty == "float" || f_ty == "f32" {
+                                let nf = to_f64(val, builder);
+                                builder.ins().fcmp(FloatCC::NotEqual, old_v, nf)
+                            } else {
+                                builder.ins().icmp(IntCC::NotEqual, old_v, val)
+                            };
+                            let mask = builder.ins().load(env.int_ty, MemFlagsData::new(), base, 0);
+                            let new_mask = builder.ins().bor_imm(mask, (1u64 << fi) as i64);
+                            let updated = builder.ins().select(changed, new_mask, mask);
+                            builder.ins().store(MemFlagsData::new(), updated, base, 0);
+                        }
+                    }
+                    store_struct_field(builder, val, base, offset, f_ty);
                 }
                 Some(VarInfo::StructPtr {
                     ptr_var,
@@ -1447,12 +2060,25 @@ fn compile_stmt(
                 }) => {
                     assert!(is_mut, "Error: parameter '{}' is not `mut`!", var);
                     let def = env.structs.get(&struct_name).unwrap();
-                    if field_is_float(def, field) {
-                        val = to_f64(val, builder);
-                    }
                     let offset = field_offset(def, field);
+                    let f_ty = field_type(def, field);
                     let addr = builder.use_var(ptr_var);
-                    builder.ins().store(MemFlagsData::new(), val, addr, offset);
+                    if let Some(fi) = def.fields.iter().position(|(f, _)| f == field) {
+                        if fi < 64 && (def.sync_mask & (1u64 << fi)) != 0 {
+                            let old_v = load_struct_field(builder, addr, offset, f_ty, env.int_ty);
+                            let changed = if f_ty == "float" || f_ty == "f32" {
+                                let nf = to_f64(val, builder);
+                                builder.ins().fcmp(FloatCC::NotEqual, old_v, nf)
+                            } else {
+                                builder.ins().icmp(IntCC::NotEqual, old_v, val)
+                            };
+                            let mask = builder.ins().load(env.int_ty, MemFlagsData::new(), addr, 0);
+                            let new_mask = builder.ins().bor_imm(mask, (1u64 << fi) as i64);
+                            let updated = builder.ins().select(changed, new_mask, mask);
+                            builder.ins().store(MemFlagsData::new(), updated, addr, 0);
+                        }
+                    }
+                    store_struct_field(builder, val, addr, offset, f_ty);
                 }
                 _ => panic!("'{}' is not a struct!", var),
             }
@@ -1563,6 +2189,7 @@ fn compile_stmt(
 
             builder.switch_to_block(body_bb);
             builder.seal_block(body_bb);
+            env.loop_targets.push((header_bb, exit_bb));
             let mut body_ret = false;
             for s in body {
                 if compile_stmt(s, builder, vars, env, owned_strings, owned_vecs) {
@@ -1570,6 +2197,7 @@ fn compile_stmt(
                     break;
                 }
             }
+            env.loop_targets.pop();
             if !body_ret {
                 builder.ins().jump(header_bb, &[]);
             }
@@ -1787,6 +2415,22 @@ fn compile_stmt(
             };
             compile_stmt(&desugared, builder, vars, env, owned_strings, owned_vecs)
         }
+        Stmt::Break => {
+            let (_, break_bb) = *env
+                .loop_targets
+                .last()
+                .expect("`break` can only be used inside a loop!");
+            builder.ins().jump(break_bb, &[]);
+            true
+        }
+        Stmt::Continue => {
+            let (cont_bb, _) = *env
+                .loop_targets
+                .last()
+                .expect("`continue` can only be used inside a loop!");
+            builder.ins().jump(cont_bb, &[]);
+            true
+        }
         Stmt::Defer(inner) => {
             env.deferred.push((**inner).clone());
             false
@@ -1902,19 +2546,18 @@ fn compile_stmt(
                 .get(s_name)
                 .unwrap_or_else(|| panic!("Unknown struct: {}", s_name))
                 .clone();
-            let byte_size = (def.fields.len() * 8) as u32;
+            let byte_size = struct_byte_size(&def);
             let tmp_slot = builder.create_sized_stack_slot(StackSlotData::new(
                 StackSlotKind::ExplicitSlot,
                 byte_size,
                 3,
             ));
             for (f_name, f_expr) in fields {
-                let mut val = compile_expr(f_expr, builder, vars, env);
-                if field_is_float(&def, f_name) {
-                    val = to_f64(val, builder);
-                }
+                let val = compile_expr(f_expr, builder, vars, env);
                 let off = field_offset(&def, f_name);
-                builder.ins().stack_store(env.int_ty, val, tmp_slot, off);
+                let f_ty = field_type(&def, f_name);
+                let base = builder.ins().stack_addr(env.int_ty, tmp_slot, 0);
+                store_struct_field(builder, val, base, off, f_ty);
             }
             let src_addr = builder.ins().stack_addr(env.int_ty, tmp_slot, 0);
             let size_val = builder.ins().iconst(env.int_ty, byte_size as i64);
@@ -2226,6 +2869,7 @@ fn compile_stmt(
 
             let header_bb = builder.create_block();
             let body_bb = builder.create_block();
+            let step_bb = builder.create_block();
             let exit_bb = builder.create_block();
 
             builder.ins().jump(header_bb, &[]);
@@ -2237,6 +2881,7 @@ fn compile_stmt(
 
             builder.switch_to_block(body_bb);
             builder.seal_block(body_bb);
+            env.loop_targets.push((step_bb, exit_bb));
             let mut body_ret = false;
             for s in body {
                 if compile_stmt(s, builder, vars, env, owned_strings, owned_vecs) {
@@ -2244,12 +2889,16 @@ fn compile_stmt(
                     break;
                 }
             }
+            env.loop_targets.pop();
             if !body_ret {
-                let cur_v = builder.use_var(loop_var);
-                let next_val = builder.ins().iadd_imm_s(cur_v, 1);
-                builder.def_var(loop_var, next_val);
-                builder.ins().jump(header_bb, &[]);
+                builder.ins().jump(step_bb, &[]);
             }
+            builder.switch_to_block(step_bb);
+            builder.seal_block(step_bb);
+            let cur_v = builder.use_var(loop_var);
+            let next_val = builder.ins().iadd_imm_s(cur_v, 1);
+            builder.def_var(loop_var, next_val);
+            builder.ins().jump(header_bb, &[]);
             builder.seal_block(header_bb);
 
             builder.switch_to_block(exit_bb);
@@ -2257,7 +2906,54 @@ fn compile_stmt(
             false
         }
         Stmt::Return(expr) => {
-            let val = compile_expr(expr, builder, vars, env);
+            let val = if let Some((ret_ptr_var, rs_name)) = env.ret_struct_ptr.clone() {
+                let ret_ptr = builder.use_var(ret_ptr_var);
+                let def = env.structs.get(&rs_name).unwrap().clone();
+                match expr {
+                    Expr::StructInit { fields, .. } => {
+                        if def.sync_mask != 0 {
+                            let zero = builder.ins().iconst(env.int_ty, 0);
+                            builder.ins().store(MemFlagsData::new(), zero, ret_ptr, 0);
+                        }
+                        for (f_name, f_expr) in fields {
+                            let v = compile_expr(f_expr, builder, vars, env);
+                            let off = field_offset(&def, f_name);
+                            let f_ty = field_type(&def, f_name);
+                            store_struct_field(builder, v, ret_ptr, off, f_ty);
+                        }
+                    }
+                    Expr::Var(vn) => match vars.get(vn) {
+                        Some(VarInfo::Struct { slot, .. }) => {
+                            let src = builder.ins().stack_addr(env.int_ty, *slot, 0);
+                            for (f_name, f_ty) in &def.fields {
+                                let off = field_offset(&def, f_name);
+                                let v = load_struct_field(builder, src, off, f_ty, env.int_ty);
+                                store_struct_field(builder, v, ret_ptr, off, f_ty);
+                            }
+                        }
+                        Some(VarInfo::StructPtr { ptr_var, .. }) => {
+                            let src = builder.use_var(*ptr_var);
+                            for (f_name, f_ty) in &def.fields {
+                                let off = field_offset(&def, f_name);
+                                let v = load_struct_field(builder, src, off, f_ty, env.int_ty);
+                                store_struct_field(builder, v, ret_ptr, off, f_ty);
+                            }
+                        }
+                        _ => panic!("Expected struct '{}' in return", rs_name),
+                    },
+                    other => {
+                        let src = compile_expr(other, builder, vars, env);
+                        for (f_name, f_ty) in &def.fields {
+                            let off = field_offset(&def, f_name);
+                            let v = load_struct_field(builder, src, off, f_ty, env.int_ty);
+                            store_struct_field(builder, v, ret_ptr, off, f_ty);
+                        }
+                    }
+                }
+                ret_ptr
+            } else {
+                compile_expr(expr, builder, vars, env)
+            };
             let to_run: Vec<Stmt> = env.deferred.drain(..).rev().collect();
             for d_stmt in &to_run {
                 compile_stmt(d_stmt, builder, vars, env, owned_strings, owned_vecs);
@@ -2442,6 +3138,7 @@ fn compile_expr(
                     .ins()
                     .load(env.int_ty, MemFlagsData::new(), ptr_val, 0)
             }
+            Some(VarInfo::Bytes { var, .. }) => builder.use_var(*var),
             _ => {
                 if let Some(&c_val) = env.user_enums.get(name) {
                     builder.ins().iconst(env.int_ty, c_val)
@@ -2461,7 +3158,9 @@ fn compile_expr(
                     env.int_ty
                 };
                 let offset = field_offset(def, field);
-                builder.ins().stack_load(env.int_ty, ty, *slot, offset)
+                let f_ty = field_type(def, field);
+                let base = builder.ins().stack_addr(env.int_ty, *slot, 0);
+                load_struct_field(builder, base, offset, f_ty, env.int_ty)
             }
             Some(VarInfo::StructPtr {
                 ptr_var,
@@ -2469,14 +3168,10 @@ fn compile_expr(
                 ..
             }) => {
                 let def = env.structs.get(struct_name).unwrap();
-                let ty = if field_is_float(def, field) {
-                    types::F64
-                } else {
-                    env.int_ty
-                };
                 let offset = field_offset(def, field);
+                let f_ty = field_type(def, field);
                 let addr = builder.use_var(*ptr_var);
-                builder.ins().load(ty, MemFlagsData::new(), addr, offset)
+                load_struct_field(builder, addr, offset, f_ty, env.int_ty)
             }
             Some(VarInfo::Tuple {
                 slot,
@@ -2530,6 +3225,18 @@ fn compile_expr(
             );
         }
         Expr::BinOp { left, op, right } => {
+            if let Some(s_name) = expr_struct_type(left, vars, env) {
+                let op_method = match op {
+                    Op::Add => "op_add",
+                    Op::Sub => "op_sub",
+                    Op::Mul => "op_mul",
+                    Op::Div => "op_div",
+                    Op::Eq => "op_eq",
+                    _ => panic!("Unsupported operator on struct '{}'", s_name),
+                };
+                let full_name = format!("{}__{}", s_name, op_method);
+                return compile_call(&full_name, &[(*left.clone()), (*right.clone())], builder, vars, env);
+            }
             let l = compile_expr(left, builder, vars, env);
             let r = compile_expr(right, builder, vars, env);
             let is_float = builder.func.dfg.value_type(l) == types::F64
@@ -2549,6 +3256,9 @@ fn compile_expr(
                     Op::Eq => builder.ins().fcmp(FloatCC::Equal, lf, rf),
                     Op::NotEq => builder.ins().fcmp(FloatCC::NotEqual, lf, rf),
                     Op::And | Op::Or => panic!("Cannot use && or || on floats"),
+                    Op::BitOr | Op::BitAnd | Op::BitXor | Op::Shl | Op::Shr => {
+                        panic!("Cannot use bitwise operators on floats")
+                    }
                 }
             } else {
                 match op {
@@ -2588,6 +3298,11 @@ fn compile_expr(
                         };
                         builder.ins().bor(lb, rb)
                     }
+                    Op::BitOr => builder.ins().bor(l, r),
+                    Op::BitAnd => builder.ins().band(l, r),
+                    Op::BitXor => builder.ins().bxor(l, r),
+                    Op::Shl => builder.ins().ishl(l, r),
+                    Op::Shr => builder.ins().sshr(l, r),
                 }
             }
         }
@@ -2827,7 +3542,9 @@ fn collect_parallel_in_stmts(
                 let helper_name = format!("__par_body_{}", *next_id);
                 *next_id += 1;
                 out_funcs.push(striv_syntax::Function {
+                    is_rpc: false,
                     name: helper_name.clone(),
+                    type_params: Vec::new(),
                     params,
                     ret_type: None,
                     body: body.clone(),
@@ -2959,6 +3676,23 @@ fn collect_free_vars_in_expr(
     }
 }
 
+fn expr_struct_type(
+    expr: &Expr,
+    vars: &HashMap<String, VarInfo>,
+    env: &CompileEnv,
+) -> Option<String> {
+    match expr {
+        Expr::Var(vn) => match vars.get(vn) {
+            Some(VarInfo::Struct { struct_name, .. })
+            | Some(VarInfo::StructPtr { struct_name, .. }) => Some(struct_name.clone()),
+            _ => None,
+        },
+        Expr::Call { name, .. } => env.fn_ret_structs.get(name).cloned().flatten(),
+        Expr::BinOp { left, .. } => expr_struct_type(left, vars, env),
+        _ => None,
+    }
+}
+
 fn tuple_field_index(field: &str) -> Option<usize> {
     match field {
         "x" | "r" | "width" | "min" => Some(0),
@@ -2979,7 +3713,9 @@ pub fn eval_comptime_consts(prog: &Program) -> HashMap<String, i64> {
             .cloned()
             .collect();
         funcs.push(striv_syntax::Function {
+            is_rpc: false,
             name: format!("__comptime_{}", c_name),
+            type_params: Vec::new(),
             params: Vec::new(),
             ret_type: Some("int".to_string()),
             body: vec![Stmt::Return(c_expr.clone())],
@@ -2991,6 +3727,7 @@ pub fn eval_comptime_consts(prog: &Program) -> HashMap<String, i64> {
             enums: prog.enums.clone(),
             structs: prog.structs.clone(),
             functions: funcs,
+            tests: Vec::new(),
         };
         let mut jit = JitCompiler::new();
         let ptr = jit.compile_program(&mini_prog);

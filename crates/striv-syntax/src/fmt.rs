@@ -214,6 +214,8 @@ fn format_stmt(stmt: &Stmt, level: usize, out: &mut String) {
                 format_expr(value)
             ));
         }
+        Stmt::Break => out.push_str(&format!("{}break\n", ind)),
+        Stmt::Continue => out.push_str(&format!("{}continue\n", ind)),
         Stmt::Defer(inner) => {
             out.push_str(&format!("{}defer ", ind));
             if let Stmt::Block(stmts) = &**inner {
@@ -534,6 +536,11 @@ pub fn format_expr(expr: &Expr) -> String {
                 Op::NotEq => "!=",
                 Op::And => "&&",
                 Op::Or => "||",
+                Op::BitOr => "|",
+                Op::BitAnd => "&",
+                Op::BitXor => "^",
+                Op::Shl => "<<",
+                Op::Shr => ">>",
             };
             format!("{} {} {}", format_expr(left), op_str, format_expr(right))
         }

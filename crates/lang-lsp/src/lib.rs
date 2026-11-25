@@ -325,6 +325,47 @@ impl LanguageServer for StrivLsp {
                     sort_text: Some("1_len".to_string()),
                     ..Default::default()
                 });
+                items.push(CompletionItem {
+                    label: "as_bytes_ptr".to_string(),
+                    kind: Some(CompletionItemKind::METHOD),
+                    insert_text: Some("as_bytes_ptr()".to_string()),
+                    detail: Some("fn as_bytes_ptr() -> int (Zero-Copy pointer)".to_string()),
+                    sort_text: Some("2_as_bytes_ptr".to_string()),
+                    ..Default::default()
+                });
+                items.push(CompletionItem {
+                    label: "byte_len".to_string(),
+                    kind: Some(CompletionItemKind::METHOD),
+                    insert_text: Some("byte_len()".to_string()),
+                    detail: Some("fn byte_len() -> int".to_string()),
+                    sort_text: Some("3_byte_len".to_string()),
+                    ..Default::default()
+                });
+                return Ok(Some(CompletionResponse::Array(items)));
+            }
+            if visible
+                .iter()
+                .any(|(n, ty)| n == &var_name && ty == "Bytes")
+            {
+                for (m, snip, det) in [
+                    ("len", "len()", "fn len() -> int"),
+                    ("write_u32", "write_u32(${1:val})", "fn write_u32(v: int)"),
+                    ("write_i64", "write_i64(${1:val})", "fn write_i64(v: int)"),
+                    ("write_f64", "write_f64(${1:val})", "fn write_f64(v: float)"),
+                    ("read_u32", "read_u32(${1:offset})", "fn read_u32(offset: int) -> int"),
+                    ("read_i64", "read_i64(${1:offset})", "fn read_i64(offset: int) -> int"),
+                    ("read_f64", "read_f64(${1:offset})", "fn read_f64(offset: int) -> float"),
+                ] {
+                    items.push(CompletionItem {
+                        label: m.to_string(),
+                        kind: Some(CompletionItemKind::METHOD),
+                        insert_text: Some(snip.to_string()),
+                        insert_text_format: Some(InsertTextFormat::SNIPPET),
+                        detail: Some(det.to_string()),
+                        sort_text: Some(format!("0_{}", m)),
+                        ..Default::default()
+                    });
+                }
                 return Ok(Some(CompletionResponse::Array(items)));
             }
             if visible
@@ -578,6 +619,11 @@ impl LanguageServer for StrivLsp {
             "timeout",
             "defer",
             "yield",
+            "break",
+            "continue",
+            "test",
+            "sync",
+            "rpc",
         ];
         for kw in keywords_with_space {
             items.push(CompletionItem {

@@ -403,3 +403,44 @@ thread_local! {
 pub extern "C" fn striv_tuple_buf_ptr() -> *mut u64 {
     TUPLE_BUF.with(|b| b.get() as *mut u64)
 }
+
+thread_local! {
+    static ASSERT_FAILED: Cell<bool> = const { Cell::new(false) };
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_assert(cond: i64) -> i64 {
+    if cond == 0 {
+        ASSERT_FAILED.with(|f| f.set(true));
+    }
+    0
+}
+
+pub fn take_assert_failed() -> bool {
+    ASSERT_FAILED.with(|f| f.replace(false))
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_sin(x: f64) -> f64 {
+    x.sin()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_cos(x: f64) -> f64 {
+    x.cos()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_tan(x: f64) -> f64 {
+    x.tan()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_atan2(y: f64, x: f64) -> f64 {
+    y.atan2(x)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_sqrt(x: f64) -> f64 {
+    x.sqrt()
+}

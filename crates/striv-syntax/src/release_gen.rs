@@ -307,6 +307,8 @@ fn emit_stmt(stmt: &Stmt, structs: &HashSet<String>, level: usize, out: &mut Str
             }
             out.push_str(&format!("{}}}\n", ind));
         }
+        Stmt::Break => out.push_str(&format!("{}break;\n", ind)),
+        Stmt::Continue => out.push_str(&format!("{}continue;\n", ind)),
         Stmt::Defer(_) | Stmt::Block(_) | Stmt::Yield | Stmt::BlockCall { .. } => {
             out.push_str(&format!(
                 "{}// defer/block not yet lowered in release_gen\n",
@@ -513,6 +515,11 @@ fn emit_expr(expr: &Expr, structs: &HashSet<String>) -> String {
                 Op::NotEq => "!=",
                 Op::And => "&&",
                 Op::Or => "||",
+                Op::BitOr => "|",
+                Op::BitAnd => "&",
+                Op::BitXor => "^",
+                Op::Shl => "<<",
+                Op::Shr => ">>",
             };
             format!(
                 "({} {} {})",

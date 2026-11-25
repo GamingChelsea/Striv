@@ -731,6 +731,129 @@ pub extern "C" fn striv_svec_len(v_ptr: *const RawStructVec) -> i64 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn striv_svec_as_bytes_ptr(v_ptr: *const RawStructVec) -> i64 {
+    unsafe { (*v_ptr).data.as_ptr() as i64 }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_svec_byte_len(v_ptr: *const RawStructVec) -> i64 {
+    unsafe { (*v_ptr).data.len() as i64 }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_bytes_write_u32(p: *mut Vec<u8>, v: i64) -> i64 {
+    unsafe {
+        (*p).extend_from_slice(&(v as u32).to_le_bytes());
+    }
+    0
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_bytes_write_i64(p: *mut Vec<u8>, v: i64) -> i64 {
+    unsafe {
+        (*p).extend_from_slice(&v.to_le_bytes());
+    }
+    0
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_bytes_write_f64(p: *mut Vec<u8>, v: f64) -> i64 {
+    unsafe {
+        (*p).extend_from_slice(&v.to_le_bytes());
+    }
+    0
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_bytes_read_u32(p: *const Vec<u8>, offset: i64) -> i64 {
+    let b = unsafe { &*p };
+    let off = offset as usize;
+    if off + 4 > b.len() {
+        return -1;
+    }
+    u32::from_le_bytes(b[off..off + 4].try_into().unwrap()) as i64
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_bytes_read_i64(p: *const Vec<u8>, offset: i64) -> i64 {
+    let b = unsafe { &*p };
+    let off = offset as usize;
+    if off + 8 > b.len() {
+        return 0;
+    }
+    i64::from_le_bytes(b[off..off + 8].try_into().unwrap())
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_bytes_read_f64(p: *const Vec<u8>, offset: i64) -> f64 {
+    let b = unsafe { &*p };
+    let off = offset as usize;
+    if off + 8 > b.len() {
+        return 0.0;
+    }
+    f64::from_le_bytes(b[off..off + 8].try_into().unwrap())
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_pack_struct(
+    struct_ptr: *const u8,
+    layout_ptr: *const u32,
+    full: i64,
+) -> *mut Vec<u8> {
+    unsafe {
+        let count = *layout_ptr as usize;
+        let sync_mask = (*layout_ptr.add(1) as u64) | ((*layout_ptr.add(2) as u64) << 32);
+        let dirty_mask = if full != 0 {
+            sync_mask
+        } else {
+            *(struct_ptr as *const u64) & sync_mask
+        };
+        let mut out = Vec::with_capacity(64);
+        out.extend_from_slice(&dirty_mask.to_le_bytes());
+        for i in 0..count {
+            if (dirty_mask & (1u64 << i)) != 0 {
+                let off = *layout_ptr.add(3 + i * 2) as usize;
+                let sz = *layout_ptr.add(3 + i * 2 + 1) as usize;
+                out.extend_from_slice(std::slice::from_raw_parts(struct_ptr.add(off), sz));
+            }
+        }
+        Box::into_raw(Box::new(out))
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_apply_struct(
+    struct_ptr: *mut u8,
+    layout_ptr: *const u32,
+    bytes_ptr: *const Vec<u8>,
+) -> i64 {
+    unsafe {
+        let pkt = &*bytes_ptr;
+        if pkt.len() < 8 {
+            return 0;
+        }
+        let count = *layout_ptr as usize;
+        let mask = u64::from_le_bytes(pkt[0..8].try_into().unwrap());
+        let mut cursor = 8usize;
+        for i in 0..count {
+            if (mask & (1u64 << i)) != 0 {
+                let off = *layout_ptr.add(3 + i * 2) as usize;
+                let sz = *layout_ptr.add(3 + i * 2 + 1) as usize;
+                if cursor + sz <= pkt.len() {
+                    std::ptr::copy_nonoverlapping(
+                        pkt.as_ptr().add(cursor),
+                        struct_ptr.add(off),
+                        sz,
+                    );
+                }
+                cursor += sz;
+            }
+        }
+        0
+    }
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn striv_svec_clear(v_ptr: *mut RawStructVec) -> i64 {
     let v = unsafe { &mut *v_ptr };
     v.data.clear();

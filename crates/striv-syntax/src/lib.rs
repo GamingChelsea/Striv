@@ -1,6 +1,7 @@
 use logos::Logos;
 
 pub mod fmt;
+pub mod monomorphize;
 pub mod release_gen;
 pub use fmt::{format_expr, format_program, format_source};
 
@@ -44,17 +45,22 @@ pub struct Program {
     pub enums: Vec<EnumDef>,
     pub structs: Vec<StructDef>,
     pub functions: Vec<Function>,
+    pub tests: Vec<(String, Vec<Stmt>)>,
 }
 
 #[derive(Debug, Clone)]
 pub struct StructDef {
     pub name: String,
+    pub type_params: Vec<String>,
     pub fields: Vec<(String, String)>, // (field_name, type_name)
+    pub sync_mask: u64,
 }
 
 #[derive(Debug, Clone)]
 pub struct Function {
     pub name: String,
+    pub is_rpc: bool,
+    pub type_params: Vec<String>,
     pub params: Vec<(String, String, bool)>,
     pub ret_type: Option<String>,
     pub body: Vec<Stmt>,
@@ -109,6 +115,8 @@ pub enum Stmt {
     Defer(Box<Stmt>),
     Block(Vec<Stmt>),
     Yield,
+    Break,
+    Continue,
     BlockCall {
         name: String,
         args: Vec<Expr>,
@@ -240,6 +248,11 @@ pub enum Op {
     NotEq,
     And,
     Or,
+    BitOr,
+    BitAnd,
+    BitXor,
+    Shl,
+    Shr,
 }
 
 // Lexer
@@ -305,6 +318,16 @@ pub enum Token {
     Defer,
     #[token("yield")]
     Yield,
+    #[token("break")]
+    Break,
+    #[token("continue")]
+    Continue,
+    #[token("test")]
+    Test,
+    #[token("sync")]
+    Sync,
+    #[token("rpc")]
+    Rpc,
     #[token("Ok")]
     OkKw,
     #[token("Err")]
@@ -355,6 +378,16 @@ pub enum Token {
     AndAnd,
     #[token("||")]
     OrOr,
+    #[token("|")]
+    Pipe,
+    #[token("&")]
+    Amp,
+    #[token("^")]
+    Caret,
+    #[token("<<")]
+    Shl,
+    #[token(">>")]
+    Shr,
     #[token("=>")]
     FatArrow,
     #[token("=")]
@@ -420,6 +453,11 @@ impl Token {
             Token::Timeout => "`timeout`".to_string(),
             Token::Defer => "`defer`".to_string(),
             Token::Yield => "`yield`".to_string(),
+            Token::Break => "`break`".to_string(),
+            Token::Continue => "`continue`".to_string(),
+            Token::Test => "`test`".to_string(),
+            Token::Sync => "`sync`".to_string(),
+            Token::Rpc => "`rpc`".to_string(),
             Token::OkKw => "`Ok`".to_string(),
             Token::ErrKw => "`Err`".to_string(),
             Token::SomeKw => "`Some`".to_string(),
@@ -448,6 +486,11 @@ impl Token {
             Token::GtEq => "`>=`".to_string(),
             Token::AndAnd => "`&&`".to_string(),
             Token::OrOr => "`||`".to_string(),
+            Token::Pipe => "`|`".to_string(),
+            Token::Amp => "`&`".to_string(),
+            Token::Caret => "`^`".to_string(),
+            Token::Shl => "`<<`".to_string(),
+            Token::Shr => "`>>`".to_string(),
             Token::Plus => "`+`".to_string(),
             Token::Minus => "`-`".to_string(),
             Token::Star => "`*`".to_string(),
@@ -536,6 +579,7 @@ impl Parser {
         let mut enums = Vec::new();
         let mut structs = Vec::new();
         let mut functions = Vec::new();
+        let mut tests = Vec::new();
         while let Some(tok) = self.peek() {
             match tok {
                 Token::Use => {
@@ -598,6 +642,20 @@ impl Parser {
                     self.expect(Token::RBrace);
                 }
                 Token::Fn => functions.push(self.parse_function()),
+                Token::Rpc => {
+                    self.next();
+                    let mut f = self.parse_function();
+                    f.is_rpc = true;
+                    functions.push(f);
+                }
+                Token::Test => {
+                    self.next();
+                    let Some(Token::Str(t_name)) = self.next() else {
+                        self.error("Expected test name string after `test`");
+                    };
+                    let body = self.parse_block();
+                    tests.push((t_name, body));
+                }
                 Token::Const => {
                     self.next(); // consume `const`
                     let Some(Token::Ident(c_name)) = self.next() else {
@@ -620,6 +678,7 @@ impl Parser {
             enums,
             structs,
             functions,
+            tests,
         }
     }
 
@@ -662,9 +721,17 @@ impl Parser {
         let Some(Token::Ident(name)) = self.next() else {
             panic!("Struct name expected")
         };
+        let type_params = self.parse_type_params();
         self.expect(Token::LBrace);
         let mut fields = Vec::new();
+        let mut sync_mask = 0u64;
         while self.peek() != Some(&Token::RBrace) {
+            let is_sync = if self.peek() == Some(&Token::Sync) {
+                self.next();
+                true
+            } else {
+                false
+            };
             let Some(Token::Ident(f_name)) = self.next() else {
                 self.error("Expected field name")
             };
@@ -672,13 +739,21 @@ impl Parser {
             let Some(Token::Ident(f_ty)) = self.next() else {
                 self.error("Expected field type")
             };
+            if is_sync && fields.len() < 64 {
+                sync_mask |= 1u64 << fields.len();
+            }
             fields.push((f_name, f_ty));
             if self.peek() == Some(&Token::Comma) {
                 self.next();
             }
         }
         self.expect(Token::RBrace);
-        StructDef { name, fields }
+        StructDef {
+            name,
+            type_params,
+            fields,
+            sync_mask,
+        }
     }
 
     fn parse_method(&mut self, struct_name: &str) -> Function {
@@ -725,6 +800,8 @@ impl Parser {
         };
         Function {
             name: format!("{}__{}", struct_name, m_name),
+            is_rpc: false,
+            type_params: Vec::new(),
             params,
             ret_type,
             body: self.parse_block(),
@@ -736,6 +813,7 @@ impl Parser {
         let Some(Token::Ident(name)) = self.next() else {
             panic!("Function Name expected")
         };
+        let type_params = self.parse_type_params();
         self.expect(Token::LParen);
 
         let mut params = Vec::new();
@@ -779,6 +857,8 @@ impl Parser {
         };
         Function {
             name,
+            is_rpc: false,
+            type_params,
             params,
             ret_type,
             body: self.parse_block(),
@@ -870,6 +950,14 @@ impl Parser {
                 let expr = self.parse_expr();
                 self.expect(Token::RParen);
                 Stmt::Print(expr)
+            }
+            Some(Token::Break) => {
+                self.next();
+                Stmt::Break
+            }
+            Some(Token::Continue) => {
+                self.next();
+                Stmt::Continue
             }
             Some(Token::Defer) => {
                 self.next();
@@ -1239,16 +1327,21 @@ impl Parser {
         match self.peek() {
             Some(Token::OrOr) => Some((Op::Or, 1)),
             Some(Token::AndAnd) => Some((Op::And, 2)),
-            Some(Token::EqEq) => Some((Op::Eq, 3)),
-            Some(Token::NotEq) => Some((Op::NotEq, 3)),
-            Some(Token::Lt) => Some((Op::Lt, 4)),
-            Some(Token::Gt) => Some((Op::Gt, 4)),
-            Some(Token::LtEq) => Some((Op::LtEq, 4)),
-            Some(Token::GtEq) => Some((Op::GtEq, 4)),
-            Some(Token::Plus) => Some((Op::Add, 5)),
-            Some(Token::Minus) => Some((Op::Sub, 5)),
-            Some(Token::Star) => Some((Op::Mul, 6)),
-            Some(Token::Slash) => Some((Op::Div, 6)),
+            Some(Token::Pipe) => Some((Op::BitOr, 3)),
+            Some(Token::Caret) => Some((Op::BitXor, 4)),
+            Some(Token::Amp) => Some((Op::BitAnd, 5)),
+            Some(Token::EqEq) => Some((Op::Eq, 6)),
+            Some(Token::NotEq) => Some((Op::NotEq, 6)),
+            Some(Token::Lt) => Some((Op::Lt, 7)),
+            Some(Token::Gt) => Some((Op::Gt, 7)),
+            Some(Token::LtEq) => Some((Op::LtEq, 7)),
+            Some(Token::GtEq) => Some((Op::GtEq, 7)),
+            Some(Token::Shl) => Some((Op::Shl, 8)),
+            Some(Token::Shr) => Some((Op::Shr, 8)),
+            Some(Token::Plus) => Some((Op::Add, 9)),
+            Some(Token::Minus) => Some((Op::Sub, 9)),
+            Some(Token::Star) => Some((Op::Mul, 10)),
+            Some(Token::Slash) => Some((Op::Div, 10)),
             _ => None,
         }
     }
@@ -1274,15 +1367,39 @@ impl Parser {
         left
     }
 
+    fn parse_type_params(&mut self) -> Vec<String> {
+        let mut params = Vec::new();
+        if self.peek() == Some(&Token::Lt) {
+            self.next(); // `<`
+            while self.peek() != Some(&Token::Gt) {
+                let Some(Token::Ident(tp)) = self.next() else {
+                    self.error("Expected type parameter name in `<...>`");
+                };
+                params.push(tp);
+                if self.peek() == Some(&Token::Comma) {
+                    self.next();
+                }
+            }
+            self.expect(Token::Gt);
+        }
+        params
+    }
+
     fn parse_type_name(&mut self) -> String {
         let Some(Token::Ident(base)) = self.next() else {
             self.error("Expected type name");
         };
         if self.peek() == Some(&Token::Lt) {
             self.next(); // `<`
-            let inner = self.parse_type_name();
+            let mut args = Vec::new();
+            while self.peek() != Some(&Token::Gt) {
+                args.push(self.parse_type_name());
+                if self.peek() == Some(&Token::Comma) {
+                    self.next();
+                }
+            }
             self.expect(Token::Gt);
-            format!("{}<{}>", base, inner)
+            format!("{}<{}>", base, args.join(","))
         } else {
             base
         }
@@ -1681,9 +1798,12 @@ pub fn load_program_with_imports(entry_path: &std::path::Path) -> Result<Program
         enums: Vec::new(),
         structs: Vec::new(),
         functions: Vec::new(),
+        tests: Vec::new(),
     };
 
     load_recursive(entry_path, &mut visited, &mut combined)?;
+    expand_rpc_functions(&mut combined);
+    monomorphize::monomorphize_program(&mut combined);
     Ok(combined)
 }
 
@@ -1723,5 +1843,175 @@ fn load_recursive(
     out.enums.extend(prog.enums);
     out.structs.extend(prog.structs);
     out.functions.extend(prog.functions);
+    out.tests.extend(prog.tests);
     Ok(())
+}
+
+pub fn fnv1a_32(name: &str) -> u32 {
+    let mut hash: u32 = 0x811c9dc5;
+    for b in name.bytes() {
+        hash ^= b as u32;
+        hash = hash.wrapping_mul(0x01000193);
+    }
+    hash
+}
+
+pub fn expand_rpc_functions(prog: &mut Program) {
+    let struct_names: std::collections::HashSet<String> =
+        prog.structs.iter().map(|s| s.name.clone()).collect();
+
+    let rpc_fns: Vec<Function> = prog.functions.iter().filter(|f| f.is_rpc).cloned().collect();
+    if rpc_fns.is_empty() {
+        return;
+    }
+
+    let mut dispatch_arms: Vec<(Option<(String, bool)>, u32, String, Vec<(String, String)>)> = Vec::new();
+
+    for rf in &rpc_fns {
+        let hash = fnv1a_32(&rf.name);
+        let (ctx_param, net_params_slice) = match rf.params.first() {
+            Some((_, ty, is_mut)) if struct_names.contains(ty) => {
+                (Some((ty.clone(), *is_mut)), &rf.params[1..])
+            }
+            _ => (None, &rf.params[..]),
+        };
+
+        let mut pack_body = vec![
+            Stmt::Let {
+                name: "__pkt".into(),
+                ty_hint: Some("Bytes".into()),
+                is_mut: true,
+                value: Expr::Call { name: "Bytes__new".into(), args: vec![] },
+            },
+            Stmt::MethodCall {
+                receiver: "__pkt".into(),
+                method: "write_u32".into(),
+                args: vec![Expr::Int(hash as i64)],
+            },
+        ];
+
+        let mut net_meta = Vec::new();
+        for (p_name, p_ty, _) in net_params_slice {
+            let write_method = if p_ty == "float" || p_ty == "f32" {
+                "write_f64"
+            } else {
+                "write_i64"
+            };
+            pack_body.push(Stmt::MethodCall {
+                receiver: "__pkt".into(),
+                method: write_method.into(),
+                args: vec![Expr::Var(p_name.clone())],
+            });
+            net_meta.push((p_name.clone(), p_ty.clone()));
+        }
+        pack_body.push(Stmt::Return(Expr::Var("__pkt".into())));
+
+        prog.functions.push(Function {
+            name: format!("{}_pack", rf.name),
+            is_rpc: false,
+            type_params: vec![],
+            params: net_params_slice.to_vec(),
+            ret_type: Some("Bytes".into()),
+            body: pack_body,
+        });
+
+        dispatch_arms.push((ctx_param, hash, rf.name.clone(), net_meta));
+    }
+
+    let first_ctx = dispatch_arms[0].0.clone();
+    let mut disp_params = Vec::new();
+    if let Some((ctx_ty, ctx_mut)) = &first_ctx {
+        disp_params.push(("__ctx".into(), ctx_ty.clone(), *ctx_mut));
+    }
+    disp_params.push(("__pkt".into(), "Bytes".into(), false));
+
+    let mut disp_body = vec![
+        Stmt::If {
+            cond: Expr::BinOp {
+                left: Box::new(Expr::MethodCall {
+                    receiver: "__pkt".into(),
+                    method: "len".into(),
+                    args: vec![],
+                }),
+                op: Op::Lt,
+                right: Box::new(Expr::Int(4)),
+            },
+            then_block: vec![Stmt::Return(Expr::Int(0))],
+            else_block: vec![],
+        },
+        Stmt::Let {
+            name: "__rpc_id".into(),
+            ty_hint: None,
+            is_mut: false,
+            value: Expr::MethodCall {
+                receiver: "__pkt".into(),
+                method: "read_u32".into(),
+                args: vec![Expr::Int(0)],
+            },
+        },
+    ];
+
+    for (ctx_info, hash, target_fn, net_meta) in dispatch_arms {
+        let needed_bytes = 4 + (net_meta.len() as i64) * 8;
+        let mut arm_stmts = vec![Stmt::If {
+            cond: Expr::BinOp {
+                left: Box::new(Expr::MethodCall {
+                    receiver: "__pkt".into(),
+                    method: "len".into(),
+                    args: vec![],
+                }),
+                op: Op::Lt,
+                right: Box::new(Expr::Int(needed_bytes)),
+            },
+            then_block: vec![Stmt::Return(Expr::Int(0))],
+            else_block: vec![],
+        }];
+
+        let mut call_args = Vec::new();
+        if ctx_info.is_some() {
+            call_args.push(Expr::Var("__ctx".into()));
+        }
+
+        let mut offset = 4i64;
+        for (i, (_p_name, p_ty)) in net_meta.iter().enumerate() {
+            let tmp_name = format!("__rpc_arg_{}", i);
+            let read_m = if p_ty == "float" || p_ty == "f32" { "read_f64" } else { "read_i64" };
+            arm_stmts.push(Stmt::Let {
+                name: tmp_name.clone(),
+                ty_hint: None,
+                is_mut: false,
+                value: Expr::MethodCall {
+                    receiver: "__pkt".into(),
+                    method: read_m.into(),
+                    args: vec![Expr::Int(offset)],
+                },
+            });
+            call_args.push(Expr::Var(tmp_name));
+            offset += 8;
+        }
+
+        arm_stmts.push(Stmt::Call { name: target_fn, args: call_args });
+        arm_stmts.push(Stmt::Return(Expr::Int(1)));
+
+        disp_body.push(Stmt::If {
+            cond: Expr::BinOp {
+                left: Box::new(Expr::Var("__rpc_id".into())),
+                op: Op::Eq,
+                right: Box::new(Expr::Int(hash as i64)),
+            },
+            then_block: arm_stmts,
+            else_block: vec![],
+        });
+    }
+
+    disp_body.push(Stmt::Return(Expr::Int(0)));
+
+    prog.functions.push(Function {
+        name: "rpc_dispatch".into(),
+        is_rpc: false,
+        type_params: vec![],
+        params: disp_params,
+        ret_type: Some("int".into()),
+        body: disp_body,
+    });
 }
