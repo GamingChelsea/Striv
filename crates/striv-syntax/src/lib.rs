@@ -794,6 +794,14 @@ impl Parser {
                         let mut f = self.parse_function_sig_only();
                         f.rust_body = Some(self.parse_raw_brace_block());
                         functions.push(f);
+                    } else if self.peek() == Some(&Token::Proc) {
+                        self.next();
+                        let Some(Token::Ident(name)) = self.next() else {
+                            panic!("Function Name expected")
+                        };
+                        let mut f = self.parse_function_sig_rest(name);
+                        f.rust_body = Some(self.parse_raw_brace_block());
+                        functions.push(f);
                     } else {
                         rust_blocks.push(self.parse_raw_brace_block());
                     }
@@ -2559,7 +2567,7 @@ fn calc(a: int, b: int) -> int {
         assert!(odin_src.contains("LIMIT :: 42"));
         assert!(odin_src.contains("Ship :: struct {"));
         assert!(odin_src.contains("calc :: proc(a: int, b: int) -> int {"));
-        assert!(odin_src.contains("mut sum := a + b"));
+        assert!(odin_src.contains("sum := a + b"));
         assert!(odin_src.contains("doubled : int = sum * 2"));
 
         let prog_odin = Parser::new_with_dialect(&odin_src, Dialect::Odin).parse_program();

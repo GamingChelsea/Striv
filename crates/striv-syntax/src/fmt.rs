@@ -312,18 +312,16 @@ fn format_stmt(stmt: &Stmt, level: usize, out: &mut String) {
             if FMT_DIALECT.with(|d| d.get()) == crate::Dialect::Odin {
                 if let Some(t) = ty_hint {
                     out.push_str(&format!(
-                        "{}{}{} : {} = {}\n",
+                        "{}{} : {} = {}\n",
                         ind,
-                        m,
                         name,
                         t,
                         format_expr(value)
                     ));
                 } else {
                     out.push_str(&format!(
-                        "{}{}{} := {}\n",
+                        "{}{} := {}\n",
                         ind,
-                        m,
                         name,
                         format_expr(value)
                     ));

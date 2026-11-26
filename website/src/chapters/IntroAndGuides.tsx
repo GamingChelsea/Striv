@@ -87,7 +87,7 @@ fn main() -> int {
 }
 
 main :: proc() -> int {
-    mut s := Ship { x: 10.0 }
+    s := Ship { x: 10.0 }
     s.hp -= 15
     print("Ship HP: {s.hp}")
     return 0
@@ -411,7 +411,7 @@ striv switch-syntax odin src/main.strv`}
           ['RPC Procedure', 'fire :: rpc proc(mut w: W) { ... }', 'rpc fn fire(mut w: W) { ... }'],
           ['Constant', 'MAX :: 100', 'const MAX = 100'],
           ['Immutable Var', 'x := 10', 'let x = 10'],
-          ['Mutable Var', 'mut hp := 100', 'let mut hp = 100'],
+          ['Mutable Var', 'hp := 100 (immer mut)', 'let mut hp = 100'],
           ['Typed Var', 'x : float = 10.0', 'let x: float = 10.0'],
           ['C DLL Import', 'foreign "msvcrt.dll" { ... }', 'extern "msvcrt.dll" fn ...'],
         ]}

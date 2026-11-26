@@ -136,7 +136,7 @@ tweak SPEED = 12
 
 demo :: proc() -> int {
     a := 0x10
-    mut b : int = 20
+    b : int = 20
     b += a
     print("b = {b}")
     return b
@@ -163,8 +163,8 @@ demo :: proc() -> int {
     }
     return sum
 }`,odinCode:`sum_filtered :: proc() -> int {
-    mut items := [10, 20, 30]
-    mut sum := 0
+    items := [10, 20, 30]
+    sum := 0
     for i in 0..10 {
         if i == 2 { continue }
         if i == 7 { break }
@@ -197,7 +197,7 @@ fn run() -> int {
 run :: proc() -> int {
     defer print("2. LIFO-Ende")
     defer print("1. LIFO-Start")
-    mut acc := 0
+    acc := 0
     repeat_times(5) {
         acc += 3
     }
@@ -350,7 +350,7 @@ fn main() -> int {
 }
 
 main :: proc() -> int {
-    mut s := Ship { x: 10.0 }
+    s := Ship { x: 10.0 }
     s.hp -= 15
     print("Ship HP: {s.hp}")
     return 0
@@ -409,7 +409,7 @@ main :: proc() -> int {
 striv new my_game --odin --kr
 
 # Or convert an existing Rust-style file to Odin-style
-striv switch-syntax odin src/main.strv`}),s.jsx(Q,{id:"syntax-mapping",theme:r,children:S(v,"Side-by-Side Comparison","Syntax-Vergleich")}),s.jsx(Qe,{theme:r,headers:[S(v,"Construct","Konstrukt"),S(v,"Odin Dialect in Striv","Odin-Dialekt in Striv"),S(v,"Rust Dialect in Striv","Rust-Dialekt in Striv")],rows:[["Procedure / Fn","main :: proc() -> int { ... }","fn main() -> int { ... }"],["Struct","Ship :: struct { x: float }","struct Ship { x: float }"],["Enum / Open Enum","State :: open enum { Idle }","open enum State { Idle }"],["Extend Enum","State :: extend enum { Warp }","extend enum State { Warp }"],["RPC Procedure","fire :: rpc proc(mut w: W) { ... }","rpc fn fire(mut w: W) { ... }"],["Constant","MAX :: 100","const MAX = 100"],["Immutable Var","x := 10","let x = 10"],["Mutable Var","mut hp := 100","let mut hp = 100"],["Typed Var","x : float = 10.0","let x: float = 10.0"],["C DLL Import",'foreign "msvcrt.dll" { ... }','extern "msvcrt.dll" fn ...']]}),s.jsx(Q,{id:"odin-examples",theme:r,children:S(v,"Odin-Style Examples","Odin-Beispiele")}),s.jsx(ht,{theme:r,children:S(v,"Tuple swizzling (.x/.y/.z/.w and .0/.1/.2), LIFO defer, and direct foreign C-DLL calls work identically to Odin:","Tupel-Swizzling (.x/.y/.z/.w und .0/.1/.2), LIFO-defer und direkte foreign-C-DLL-Aufrufe funktionieren wie aus Odin gewohnt:")}),s.jsx(zt,{dialect:o,theme:r,filename:"odin_features.strv",code:`extern "msvcrt.dll" fn abs(x: i32) -> i32
+striv switch-syntax odin src/main.strv`}),s.jsx(Q,{id:"syntax-mapping",theme:r,children:S(v,"Side-by-Side Comparison","Syntax-Vergleich")}),s.jsx(Qe,{theme:r,headers:[S(v,"Construct","Konstrukt"),S(v,"Odin Dialect in Striv","Odin-Dialekt in Striv"),S(v,"Rust Dialect in Striv","Rust-Dialekt in Striv")],rows:[["Procedure / Fn","main :: proc() -> int { ... }","fn main() -> int { ... }"],["Struct","Ship :: struct { x: float }","struct Ship { x: float }"],["Enum / Open Enum","State :: open enum { Idle }","open enum State { Idle }"],["Extend Enum","State :: extend enum { Warp }","extend enum State { Warp }"],["RPC Procedure","fire :: rpc proc(mut w: W) { ... }","rpc fn fire(mut w: W) { ... }"],["Constant","MAX :: 100","const MAX = 100"],["Immutable Var","x := 10","let x = 10"],["Mutable Var","hp := 100 (immer mut)","let mut hp = 100"],["Typed Var","x : float = 10.0","let x: float = 10.0"],["C DLL Import",'foreign "msvcrt.dll" { ... }','extern "msvcrt.dll" fn ...']]}),s.jsx(Q,{id:"odin-examples",theme:r,children:S(v,"Odin-Style Examples","Odin-Beispiele")}),s.jsx(ht,{theme:r,children:S(v,"Tuple swizzling (.x/.y/.z/.w and .0/.1/.2), LIFO defer, and direct foreign C-DLL calls work identically to Odin:","Tupel-Swizzling (.x/.y/.z/.w und .0/.1/.2), LIFO-defer und direkte foreign-C-DLL-Aufrufe funktionieren wie aus Odin gewohnt:")}),s.jsx(zt,{dialect:o,theme:r,filename:"odin_features.strv",code:`extern "msvcrt.dll" fn abs(x: i32) -> i32
 extern "msvcrt.dll" fn strlen(s: cstr) -> int
 
 fn demo() -> float {
@@ -482,7 +482,7 @@ run_workers :: proc() -> int {
         spawn inc_shared(counter, 1000)
         spawn inc_shared(counter, 1000)
     }
-    mut out := 0
+    out := 0
     lock counter { out = counter.hits }
     return out
 }`}),s.jsx(Q,{id:"parallel-for",theme:r,children:"parallel for (Rayon)"}),s.jsx(zt,{dialect:o,theme:r,filename:"parallel_for.strv",code:`struct Particle { x: float, vx: float }
@@ -496,7 +496,7 @@ fn step_particles(dt: float) {
 }`,odinCode:`Particle :: struct { x: float, vx: float }
 
 step_particles :: proc(dt: float) {
-    mut parts : Vec<Particle> = []
+    parts : Vec<Particle> = []
     parts.push(Particle { x: 0.0, vx: 2.0 })
     parallel for mut p in parts {
         p.x = p.x + p.vx * dt
@@ -539,7 +539,7 @@ fn step(dt: float) {
 Velocity :: struct { vx: float, vy: float }
 
 step :: proc(dt: float) {
-    mut world := Ecs::new()
+    world := Ecs::new()
     e := world.spawn()
     world.set(e, Position { x: 0.0, y: 0.0 })
     world.set(e, Velocity { vx: 10.0, vy: 0.0 })
@@ -613,7 +613,7 @@ rust fn make_rocket(f: int) -> int {
 }
 
 rust { pub struct RustRocket { pub fuel: i64 } }
-rust fn make_rocket(f: int) -> int {
+rust proc make_rocket(f: int) -> int {
     crate::box_any_handle(RustRocket { fuel: f })
 }`})]})}function zp({dialect:o,theme:r,lang:v}){return s.jsxs("div",{className:"space-y-6",children:[s.jsx(oe,{children:S(v,"Standard Library & Testing","Standardbibliothek & Testing")}),s.jsx(Q,{id:"collections",theme:r,children:S(v,"Collections & Data Structures (collections.rs)","Collections & Datenstrukturen (collections.rs)")}),s.jsx(Qe,{theme:r,headers:[S(v,"Type","Typ"),S(v,"Constructor","Konstruktor"),S(v,"Methods","Methoden")],rows:[["Vec / Vec<Struct>","let mut v: Vec<T> = []","push(x), len(), byte_len(), as_bytes_ptr(), clear(), v[i]"],["Deque","Deque::new()","push_back(v), push_front(v), pop_front(), pop_back(), len()"],["Map","Map::new()","insert(k, v), get(k), contains(k), remove(k), len()"],["StrMap","StrMap::new()","insert(k, v), get(k), contains(k)"],["BTree","BTree::new()","insert(k, v), get(k), first_key(), last_key()"],["Set","Set::new()","insert(v), contains(v), remove(v), len()"],["Heap","Heap::new()","push(v), pop(), peek(), len()"],["Grid","Grid::new(w, h, def)","get(x, y), set(x, y, val), in_bounds(x, y)"]]}),s.jsx(Q,{id:"bytes-math",theme:r,children:"Bytes, Rng, BitSet, Vec3 & Mat4"}),s.jsx(Qe,{theme:r,headers:[S(v,"Type","Typ"),S(v,"Constructor","Konstruktor"),S(v,"Methods","Methoden")],rows:[["Bytes","Bytes::new() / Bytes::read_file(p)","push(b), get(i), len(), write_u32/i64/f64, read_u32/i64/f64, write_file(p)"],["Rng","Rng::new(seed)","range(min, max)"],["BitSet","BitSet::new(bits)","set(i), get(i), clear(i)"],["Vec3","Vec3::new(x, y, z)","dot(other), len()"],["Mat4","Mat4::identity()","get(r, c), set(r, c, val)"]]}),s.jsx(Q,{id:"string-fs",theme:r,children:S(v,"String, fs & Math Intrinsics","String, fs & Mathe-Intrinsics")}),s.jsx(ht,{theme:r,children:S(v,"Strings support .trim(), .contains(s), .starts_with(s), .replace(a, b), .to_int(), and .to_float(). File I/O uses fs::read_text(path) and fs::write_text(path, text). Built-in math intrinsics: sin, cos, tan, atan2, sqrt.","Strings bieten .trim(), .contains(s), .starts_with(s), .replace(a, b), .to_int() und .to_float(). Dateizugriffe erfolgen über fs::read_text(path) und fs::write_text(path, text). Eingebaute Mathe-Intrinsics sind sin, cos, tan, atan2 und sqrt.")}),s.jsx(Q,{id:"testing",theme:r,children:'test "..." & assert(...)'}),s.jsx(zt,{dialect:o,theme:r,filename:"suite.strv",code:`test "String und Mathe" {
     let raw = "  42  "

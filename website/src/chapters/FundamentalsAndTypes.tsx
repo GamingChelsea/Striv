@@ -36,7 +36,7 @@ tweak SPEED = 12
 
 demo :: proc() -> int {
     a := 0x10
-    mut b : int = 20
+    b : int = 20
     b += a
     print("b = {b}")
     return b
@@ -85,8 +85,8 @@ demo :: proc() -> int {
     return sum
 }`}
         odinCode={`sum_filtered :: proc() -> int {
-    mut items := [10, 20, 30]
-    mut sum := 0
+    items := [10, 20, 30]
+    sum := 0
     for i in 0..10 {
         if i == 2 { continue }
         if i == 7 { break }
@@ -137,7 +137,7 @@ fn run() -> int {
 run :: proc() -> int {
     defer print("2. LIFO-Ende")
     defer print("1. LIFO-Start")
-    mut acc := 0
+    acc := 0
     repeat_times(5) {
         acc += 3
     }

@@ -77,7 +77,7 @@ rust fn make_rocket(f: int) -> int {
 }
 
 rust { pub struct RustRocket { pub fuel: i64 } }
-rust fn make_rocket(f: int) -> int {
+rust proc make_rocket(f: int) -> int {
     crate::box_any_handle(RustRocket { fuel: f })
 }`}
       />

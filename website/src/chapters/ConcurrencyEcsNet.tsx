@@ -57,7 +57,7 @@ run_workers :: proc() -> int {
         spawn inc_shared(counter, 1000)
         spawn inc_shared(counter, 1000)
     }
-    mut out := 0
+    out := 0
     lock counter { out = counter.hits }
     return out
 }`}
@@ -82,7 +82,7 @@ fn step_particles(dt: float) {
         odinCode={`Particle :: struct { x: float, vx: float }
 
 step_particles :: proc(dt: float) {
-    mut parts : Vec<Particle> = []
+    parts : Vec<Particle> = []
     parts.push(Particle { x: 0.0, vx: 2.0 })
     parallel for mut p in parts {
         p.x = p.x + p.vx * dt
@@ -177,7 +177,7 @@ fn step(dt: float) {
 Velocity :: struct { vx: float, vy: float }
 
 step :: proc(dt: float) {
-    mut world := Ecs::new()
+    world := Ecs::new()
     e := world.spawn()
     world.set(e, Position { x: 0.0, y: 0.0 })
     world.set(e, Velocity { vx: 10.0, vy: 0.0 })
