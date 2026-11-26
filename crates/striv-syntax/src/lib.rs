@@ -1402,7 +1402,11 @@ impl Parser {
                 let then_block = self.parse_block();
                 let else_block = if self.peek() == Some(&Token::Else) {
                     self.next();
-                    self.parse_block()
+                    if self.peek() == Some(&Token::If) {
+                        vec![self.parse_stmt()]
+                    } else {
+                        self.parse_block()
+                    }
                 } else {
                     Vec::new()
                 };
