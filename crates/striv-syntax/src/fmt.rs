@@ -609,6 +609,7 @@ pub fn format_expr(expr: &Expr) -> String {
     match expr {
         Expr::Int(v) => v.to_string(),
         Expr::Hex(v) => format!("0x{:X}", v),
+        Expr::Null => "null".to_string(),
         Expr::Ok(e) => format!("Ok({})", format_expr(e)),
         Expr::Err(e) => format!("Err({})", format_expr(e)),
         Expr::Some(e) => format!("Some({})", format_expr(e)),

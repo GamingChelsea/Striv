@@ -275,6 +275,7 @@ pub enum StringPart {
 pub enum Expr {
     Int(i64),
     Hex(i64),
+    Null,
     Float(f64),
     UnitFloat(f64, String),
     PathConst {
@@ -1927,7 +1928,7 @@ impl Parser {
             Some(Token::NoneKw) => Expr::None,
             Some(Token::True) => Expr::Int(1),
             Some(Token::False) => Expr::Int(0),
-            Some(Token::Null) => Expr::Int(0),
+            Some(Token::Null) => Expr::Null,
             Some(Token::Bang) => {
                 let inner = self.parse_primary();
                 Expr::BinOp {
@@ -2281,6 +2282,192 @@ fn check_stmts_mut(
     }
 }
 
+pub fn is_builtin_container_type(ty: &str) -> bool {
+    matches!(
+        ty,
+        "String"
+            | "Bytes"
+            | "Vec"
+            | "Deque"
+            | "Map"
+            | "StrMap"
+            | "BTree"
+            | "Set"
+            | "Heap"
+            | "Grid"
+            | "BitSet"
+            | "Channel"
+            | "Atomic"
+            | "Ecs"
+    ) || ty.starts_with("Vec<")
+}
+
+/// Verbietet `= null` auf eingebauten Heap-Containern (nur externe Handles dürfen `null` sein!)
+pub fn check_container_nulls(prog: &Program) -> Result<(), String> {
+    for f in &prog.functions {
+        let mut container_vars = std::collections::HashSet::new();
+        for (p_name, p_ty, _) in &f.params {
+            if is_builtin_container_type(p_ty) {
+                container_vars.insert(p_name.clone());
+            }
+        }
+        check_nulls_in_block(&f.body, &mut container_vars)?;
+    }
+    for (_t_name, t_body) in &prog.tests {
+        let mut container_vars = std::collections::HashSet::new();
+        check_nulls_in_block(t_body, &mut container_vars)?;
+    }
+    Ok(())
+}
+
+fn check_nulls_in_block(
+    stmts: &[Stmt],
+    containers: &mut std::collections::HashSet<String>,
+) -> Result<(), String> {
+    for s in stmts {
+        match s {
+            Stmt::Declare { name, ty, .. } => {
+                if is_builtin_container_type(ty) {
+                    containers.insert(name.clone());
+                }
+            }
+            Stmt::Let {
+                name,
+                ty_hint,
+                value,
+                ..
+            } => {
+                let is_cont = ty_hint.as_deref().is_some_and(is_builtin_container_type)
+                    || matches!(value, Expr::StrInterp(_) | Expr::VecLit(_))
+                    || matches!(value, Expr::Call { name: cn, .. } if cn.starts_with("Bytes::") || cn.starts_with("Map::") || cn.starts_with("Ecs::") || cn.starts_with("Deque::"));
+                if is_cont {
+                    if matches!(value, Expr::Null) {
+                        return Err(format!(
+                            "Null-Fehler: Container '{}' darf nicht mit 'null' initialisiert werden!",
+                            name
+                        ));
+                    }
+                    containers.insert(name.clone());
+                }
+            }
+            Stmt::Assign { name, value } => {
+                if containers.contains(name) && matches!(value, Expr::Null) {
+                    return Err(format!(
+                        "Null-Fehler: Eingebauter Container '{}' darf nicht auf 'null' gesetzt werden!",
+                        name
+                    ));
+                }
+            }
+            Stmt::If {
+                then_block,
+                else_block,
+                ..
+            } => {
+                check_nulls_in_block(then_block, &mut containers.clone())?;
+                check_nulls_in_block(else_block, &mut containers.clone())?;
+            }
+            Stmt::While { body, .. }
+            | Stmt::ForRange { body, .. }
+            | Stmt::ForEach { body, .. }
+            | Stmt::Query { body, .. }
+            | Stmt::Lock { body, .. }
+            | Stmt::Concurrent(body) => {
+                check_nulls_in_block(body, &mut containers.clone())?;
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// Prüft für Smart Auto-Move / Auto-Clone, ob `target` in `stmts` noch irgendwo gelesen wird
+pub fn stmts_read_var(stmts: &[Stmt], target: &str) -> bool {
+    stmts.iter().any(|s| stmt_reads_var(s, target))
+}
+
+pub fn stmt_reads_var(stmt: &Stmt, target: &str) -> bool {
+    match stmt {
+        Stmt::Let { name, value, .. } => name != target && expr_reads_var(value, target),
+        Stmt::Assign { value, .. } => expr_reads_var(value, target),
+        Stmt::CompoundAssign {
+            target: ca_target,
+            value,
+            ..
+        } => {
+            matches!(
+                ca_target,
+                AssignTarget::Var(n)
+                    | AssignTarget::Field { var: n, .. }
+                    | AssignTarget::Index { var: n, .. }
+                if n == target
+            ) || expr_reads_var(value, target)
+        }
+        Stmt::FieldAssign { var, value, .. } => var == target || expr_reads_var(value, target),
+        Stmt::Call { args, .. } | Stmt::Spawn { args, .. } => {
+            args.iter().any(|a| expr_reads_var(a, target))
+        }
+        Stmt::MethodCall { receiver, args, .. } => {
+            receiver == target || args.iter().any(|a| expr_reads_var(a, target))
+        }
+        Stmt::Return(e) | Stmt::Print(e) | Stmt::Expr(e) => expr_reads_var(e, target),
+        Stmt::If {
+            cond,
+            then_block,
+            else_block,
+        } => {
+            expr_reads_var(cond, target)
+                || stmts_read_var(then_block, target)
+                || stmts_read_var(else_block, target)
+        }
+        Stmt::While { cond, body } => expr_reads_var(cond, target) || stmts_read_var(body, target),
+        Stmt::ForRange {
+            start, end, body, ..
+        } => {
+            expr_reads_var(start, target)
+                || expr_reads_var(end, target)
+                || stmts_read_var(body, target)
+        }
+        Stmt::ForEach {
+            collection, body, ..
+        } => collection == target || stmts_read_var(body, target),
+        Stmt::Query { ecs_var, body, .. } => ecs_var == target || stmts_read_var(body, target),
+        Stmt::Lock { var, body } => var == target || stmts_read_var(body, target),
+        Stmt::Match { target: m_expr, arms } => {
+            expr_reads_var(m_expr, target) || arms.iter().any(|(_, body)| stmts_read_var(body, target))
+        }
+        Stmt::Select { arms, timeout } => {
+            arms.iter()
+                .any(|a| a.channel_var == target || stmts_read_var(&a.body, target))
+                || timeout
+                    .as_ref()
+                    .is_some_and(|(ms, b)| expr_reads_var(ms, target) || stmts_read_var(b, target))
+        }
+        Stmt::Defer(inner) => stmt_reads_var(inner, target),
+        Stmt::Concurrent(b) => stmts_read_var(b, target),
+        _ => false,
+    }
+}
+
+fn expr_reads_var(expr: &Expr, target: &str) -> bool {
+    match expr {
+        Expr::Var(n) => n == target,
+        Expr::BinOp { left, right, .. } => {
+            expr_reads_var(left, target) || expr_reads_var(right, target)
+        }
+        Expr::Try(inner) => expr_reads_var(inner, target),
+        Expr::Call { args, .. } | Expr::VecLit(args) | Expr::Tuple(args) => {
+            args.iter().any(|a| expr_reads_var(a, target))
+        }
+        Expr::MethodCall { receiver, args, .. } => {
+            receiver == target || args.iter().any(|a| expr_reads_var(a, target))
+        }
+        Expr::FieldAccess { var, .. } => var == target,
+        Expr::Index { var, index } => var == target || expr_reads_var(index, target),
+        Expr::StructInit { fields, .. } => fields.iter().any(|(_, e)| expr_reads_var(e, target)),
+        _ => false,
+    }
+}
+
 pub fn load_program_with_imports(entry_path: &std::path::Path) -> Result<Program, String> {
     let mut visited = std::collections::HashSet::new();
     let mut combined = Program {
@@ -2297,6 +2484,7 @@ pub fn load_program_with_imports(entry_path: &std::path::Path) -> Result<Program
     };
 
     load_recursive(entry_path, &mut visited, &mut combined)?;
+    check_container_nulls(&combined)?;
     units::check_and_erase_units(&mut combined).map_err(|e| e)?;
     merge_open_enums(&mut combined);
     expand_rpc_functions(&mut combined);
@@ -2606,5 +2794,26 @@ fn calc(a: int, b: int) -> int {
         let allman_src = format_program_with_options(&prog_rust, Dialect::Rust, BraceStyle::Allman);
         assert!(allman_src.contains("fn calc(a: int, b: int) -> int\n{\n"));
         assert!(allman_src.contains("struct Ship\n{\n"));
+    }
+
+    #[test]
+    fn test_check_container_nulls() {
+        let bad_odin = r#"
+main :: proc() {
+    buf: Bytes
+    buf = null
+}
+"#;
+        let bad_prog = Parser::new_with_dialect(bad_odin, Dialect::Odin).parse_program();
+        assert!(check_container_nulls(&bad_prog).is_err());
+
+        let good_odin = r#"
+main :: proc() {
+    tex: TextureHandle
+    tex = null
+}
+"#;
+        let good_prog = Parser::new_with_dialect(good_odin, Dialect::Odin).parse_program();
+        assert!(check_container_nulls(&good_prog).is_ok());
     }
 }

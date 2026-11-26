@@ -941,6 +941,53 @@ pub extern "C" fn striv_svec_free(v_ptr: *mut RawStructVec) {
     }
 }
 
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_str_clone(p: *const String) -> *mut String {
+    let cloned = if p.is_null() {
+        String::new()
+    } else {
+        unsafe { (*p).clone() }
+    };
+    Box::into_raw(Box::new(cloned))
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_bytes_clone(p: *const Vec<u8>) -> *mut Vec<u8> {
+    let cloned = if p.is_null() {
+        Vec::new()
+    } else {
+        unsafe { (*p).clone() }
+    };
+    Box::into_raw(Box::new(cloned))
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_vec_clone(p: *const Vec<i64>) -> *mut Vec<i64> {
+    let cloned = if p.is_null() {
+        Vec::new()
+    } else {
+        unsafe { (*p).clone() }
+    };
+    Box::into_raw(Box::new(cloned))
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_svec_clone(p: *const RawStructVec) -> *mut RawStructVec {
+    if p.is_null() {
+        return Box::into_raw(Box::new(RawStructVec {
+            elem_size: 8,
+            len: 0,
+            data: Vec::new(),
+        }));
+    }
+    let src = unsafe { &*p };
+    Box::into_raw(Box::new(RawStructVec {
+        elem_size: src.elem_size,
+        len: src.len,
+        data: src.data.clone(),
+    }))
+}
+
 #[inline]
 fn p_is_null<T>(p: *mut T) -> bool {
     p.is_null()

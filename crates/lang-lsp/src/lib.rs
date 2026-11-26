@@ -41,6 +41,15 @@ impl StrivLsp {
             .collect();
         if diags.is_empty() {
             let mut prog = striv_syntax::Parser::new_with_dialect(text, dialect).parse_program();
+            if let Err(null_err) = striv_syntax::check_container_nulls(&prog) {
+                diags.push(Diagnostic {
+                    range: Range::new(Position::new(0, 0), Position::new(0, 1)),
+                    severity: Some(DiagnosticSeverity::ERROR),
+                    source: Some("striv-null".to_string()),
+                    message: null_err,
+                    ..Default::default()
+                });
+            }
             if let Err(unit_err) = striv_syntax::units::check_and_erase_units(&mut prog) {
                 diags.push(Diagnostic {
                     range: Range::new(Position::new(0, 0), Position::new(0, 1)),

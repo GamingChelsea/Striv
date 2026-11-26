@@ -145,6 +145,10 @@ struct CompileEnv<'a> {
     str_push_str_ref: cranelift::codegen::ir::FuncRef,
     str_print_ref: cranelift::codegen::ir::FuncRef,
     str_free_ref: cranelift::codegen::ir::FuncRef,
+    str_clone_ref: cranelift::codegen::ir::FuncRef,
+    bytes_clone_ref: cranelift::codegen::ir::FuncRef,
+    vec_clone_ref: cranelift::codegen::ir::FuncRef,
+    svec_clone_ref: cranelift::codegen::ir::FuncRef,
     str_to_cstr_ref: cranelift::codegen::ir::FuncRef,
     tweak_get_str_ref: cranelift::codegen::ir::FuncRef,
     tweak_get_vec_ref: cranelift::codegen::ir::FuncRef,
@@ -384,6 +388,10 @@ impl JitCompiler {
             "striv_str_to_cstr",
             lang_runtime::striv_str_to_cstr as *const u8,
         );
+        builder.symbol("striv_str_clone", lang_runtime::striv_str_clone as *const u8);
+        builder.symbol("striv_bytes_clone", lang_runtime::striv_bytes_clone as *const u8);
+        builder.symbol("striv_vec_clone", lang_runtime::striv_vec_clone as *const u8);
+        builder.symbol("striv_svec_clone", lang_runtime::striv_svec_clone as *const u8);
         builder.symbol_lookup_fn(Box::new(|name| {
             EXTERN_C_SYMS
                 .get()?
@@ -862,6 +870,22 @@ impl JitCompiler {
             .module
             .declare_function("striv_str_to_cstr", Linkage::Import, &sig_int_to_int)
             .unwrap();
+        let str_clone_id = self
+            .module
+            .declare_function("striv_str_clone", Linkage::Import, &sig_int_to_int)
+            .unwrap();
+        let bytes_clone_id = self
+            .module
+            .declare_function("striv_bytes_clone", Linkage::Import, &sig_int_to_int)
+            .unwrap();
+        let vec_clone_id = self
+            .module
+            .declare_function("striv_vec_clone", Linkage::Import, &sig_int_to_int)
+            .unwrap();
+        let svec_clone_id = self
+            .module
+            .declare_function("striv_svec_clone", Linkage::Import, &sig_int_to_int)
+            .unwrap();
 
         let mut fn_ret_i32: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut predeclared_externs: Vec<(String, cranelift_module::FuncId, Vec<(String, bool)>)> =
@@ -1086,6 +1110,10 @@ impl JitCompiler {
                         .declare_func_in_func(str_push_str_id, builder.func),
                     str_print_ref: self.module.declare_func_in_func(str_print_id, builder.func),
                     str_free_ref: self.module.declare_func_in_func(str_free_id, builder.func),
+                    str_clone_ref: self.module.declare_func_in_func(str_clone_id, builder.func),
+                    bytes_clone_ref: self.module.declare_func_in_func(bytes_clone_id, builder.func),
+                    vec_clone_ref: self.module.declare_func_in_func(vec_clone_id, builder.func),
+                    svec_clone_ref: self.module.declare_func_in_func(svec_clone_id, builder.func),
                     str_to_cstr_ref: self.module.declare_func_in_func(str_to_cstr_id, builder.func),
                     tweak_get_str_ref: self
                         .module
@@ -1335,14 +1363,15 @@ impl JitCompiler {
                 let mut owned_strings: Vec<Variable> = Vec::new();
                 let mut owned_vecs: Vec<Variable> = Vec::new();
                 let mut terminated = false;
-                for stmt in &func.body {
-                    if compile_stmt(
+                for (idx, stmt) in func.body.iter().enumerate() {
+                    if compile_stmt_with_rest(
                         stmt,
                         &mut builder,
                         &mut vars,
                         &mut env,
                         &mut owned_strings,
                         &mut owned_vecs,
+                        &func.body[idx + 1..],
                     ) {
                         terminated = true;
                         break;
@@ -2111,6 +2140,21 @@ fn compile_method_call(
     compile_call(&full_name, &full_args, builder, vars, env)
 }
 
+fn heap_container_ops(
+    info: &VarInfo,
+    env: &CompileEnv,
+) -> Option<(Variable, cranelift::codegen::ir::FuncRef, cranelift::codegen::ir::FuncRef)> {
+    match info {
+        VarInfo::Str { var, .. } => Some((*var, env.str_free_ref, env.str_clone_ref)),
+        VarInfo::Bytes { var, .. } => Some((*var, env.vec_free_ref, env.bytes_clone_ref)),
+        VarInfo::Handle { var, type_name, .. } if type_name == "Bytes" => {
+            Some((*var, env.vec_free_ref, env.bytes_clone_ref))
+        }
+        VarInfo::Vec { var, .. } => Some((*var, env.vec_free_ref, env.vec_clone_ref)),
+        _ => None,
+    }
+}
+
 fn compile_stmt(
     stmt: &Stmt,
     builder: &mut FunctionBuilder,
@@ -2118,6 +2162,18 @@ fn compile_stmt(
     env: &mut CompileEnv,
     owned_strings: &mut Vec<Variable>,
     owned_vecs: &mut Vec<Variable>,
+) -> bool {
+    compile_stmt_with_rest(stmt, builder, vars, env, owned_strings, owned_vecs, &[])
+}
+
+fn compile_stmt_with_rest(
+    stmt: &Stmt,
+    builder: &mut FunctionBuilder,
+    vars: &mut HashMap<String, VarInfo>,
+    env: &mut CompileEnv,
+    owned_strings: &mut Vec<Variable>,
+    owned_vecs: &mut Vec<Variable>,
+    rest_stmts: &[Stmt],
 ) -> bool {
     match stmt {
         Stmt::LetTuple { names, value } => {
@@ -2273,6 +2329,53 @@ fn compile_stmt(
             is_mut,
             value,
         } => {
+            if let Expr::Var(src_name) = value {
+                if let Some(src_info) = vars.get(src_name).cloned() {
+                    if let Some((src_cvar, _, clone_ref)) = heap_container_ops(&src_info, env) {
+                        let used_later = !env.loop_targets.is_empty()
+                            || !env.deferred.is_empty()
+                            || striv_syntax::stmts_read_var(rest_stmts, src_name);
+                        let src_ptr = builder.use_var(src_cvar);
+                        let final_ptr = if used_later {
+                            let call = builder.ins().call(clone_ref, &[src_ptr]);
+                            builder.inst_results(call)[0]
+                        } else {
+                            let zero = builder.ins().iconst(env.int_ty, 0);
+                            builder.def_var(src_cvar, zero);
+                            src_ptr
+                        };
+                        let dst_var = builder.declare_var(env.int_ty);
+                        builder.def_var(dst_var, final_ptr);
+                        match src_info {
+                            VarInfo::Str { .. } => {
+                                owned_strings.push(dst_var);
+                                vars.insert(name.clone(), VarInfo::Str { var: dst_var, is_mut: *is_mut });
+                            }
+                            VarInfo::Bytes { .. } => {
+                                owned_vecs.push(dst_var);
+                                vars.insert(name.clone(), VarInfo::Bytes { var: dst_var, is_mut: *is_mut });
+                            }
+                            VarInfo::Handle { type_name, .. } => {
+                                owned_vecs.push(dst_var);
+                                vars.insert(
+                                    name.clone(),
+                                    VarInfo::Handle {
+                                        var: dst_var,
+                                        type_name: type_name.clone(),
+                                        is_mut: *is_mut,
+                                    },
+                                );
+                            }
+                            VarInfo::Vec { .. } => {
+                                owned_vecs.push(dst_var);
+                                vars.insert(name.clone(), VarInfo::Vec { var: dst_var, is_mut: *is_mut });
+                            }
+                            _ => unreachable!(),
+                        }
+                        return false;
+                    }
+                }
+            }
             if let Some((s_name, c_args)) = match value {
                 Expr::Call { name: cn, args: ca } => cn
                     .strip_suffix("::from_json")
@@ -2664,21 +2767,64 @@ fn compile_stmt(
             }
             false
         }
-        Stmt::Assign { name, value } => match vars.get(name).cloned() {
-            Some(VarInfo::Int { var, is_mut }) => {
-                assert!(is_mut, "Error: '{}' is not `mut`!", name);
-                let val = compile_expr(value, builder, vars, env);
-                builder.def_var(var, val);
-                false
+        Stmt::Assign { name, value } => {
+            if matches!(value, Expr::Var(v) if v == name) {
+                return false;
             }
-            Some(VarInfo::Float { var, is_mut }) => {
-                assert!(is_mut, "Error: '{}' is not `mut`!", name);
-                let val = to_f64(compile_expr(value, builder, vars, env), builder);
-                builder.def_var(var, val);
-                false
+            let dst_info = vars.get(name).cloned();
+            if let Some(ref di) = dst_info {
+                if let Some((dst_cvar, free_ref, _)) = heap_container_ops(di, env) {
+                    let is_mut = match di {
+                        VarInfo::Str { is_mut, .. }
+                        | VarInfo::Bytes { is_mut, .. }
+                        | VarInfo::Vec { is_mut, .. } => *is_mut,
+                        _ => false,
+                    };
+                    assert!(is_mut, "Error: '{}' is not `mut`!", name);
+                    let new_val = if let Expr::Var(src_name) = value {
+                        if let Some((src_cvar, _, clone_ref)) =
+                            vars.get(src_name).and_then(|vi| heap_container_ops(vi, env))
+                        {
+                            let used_later = !env.loop_targets.is_empty()
+                                || !env.deferred.is_empty()
+                                || striv_syntax::stmts_read_var(rest_stmts, src_name);
+                            let src_ptr = builder.use_var(src_cvar);
+                            if used_later {
+                                let call = builder.ins().call(clone_ref, &[src_ptr]);
+                                builder.inst_results(call)[0]
+                            } else {
+                                let zero = builder.ins().iconst(env.int_ty, 0);
+                                builder.def_var(src_cvar, zero);
+                                src_ptr
+                            }
+                        } else {
+                            compile_expr(value, builder, vars, env)
+                        }
+                    } else {
+                        compile_expr(value, builder, vars, env)
+                    };
+                    let old_ptr = builder.use_var(dst_cvar);
+                    builder.ins().call(free_ref, &[old_ptr]);
+                    builder.def_var(dst_cvar, new_val);
+                    return false;
+                }
             }
-            _ => panic!("'{}' is not a regular number variable", name),
-        },
+            match dst_info {
+                Some(VarInfo::Int { var, is_mut }) => {
+                    assert!(is_mut, "Error: '{}' is not `mut`!", name);
+                    let val = compile_expr(value, builder, vars, env);
+                    builder.def_var(var, val);
+                    false
+                }
+                Some(VarInfo::Float { var, is_mut }) => {
+                    assert!(is_mut, "Error: '{}' is not `mut`!", name);
+                    let val = to_f64(compile_expr(value, builder, vars, env), builder);
+                    builder.def_var(var, val);
+                    false
+                }
+                _ => panic!("'{}' is not a regular number variable", name),
+            }
+        }
         Stmt::FieldAssign { var, field, value } => {
             let mut val = compile_expr(value, builder, vars, env);
             match vars.get(var).cloned() {
@@ -3782,6 +3928,7 @@ fn compile_expr(
 ) -> Value {
     match expr {
         Expr::Int(v) | Expr::Hex(v) => builder.ins().iconst(env.int_ty, *v),
+        Expr::Null => builder.ins().iconst(env.int_ty, 0),
         Expr::Ok(inner) | Expr::Some(inner) => compile_expr(inner, builder, vars, env),
         Expr::None => {
             let one = builder.ins().iconst(env.int_ty, 1);
@@ -5022,5 +5169,38 @@ main :: proc() -> int {
         let ptr = jit.compile_program(&prog);
         let f: fn() -> i64 = unsafe { std::mem::transmute(ptr) };
         assert_eq!(f(), 101);
+    }
+
+    #[test]
+    fn test_smart_move_and_clone() {
+        let odin_src = r#"
+main :: proc() -> int {
+    // Fall 1: `a` wird danach noch benutzt -> Auto-Clone! Unabhaengige Kopien!
+    a := Bytes::new()
+    a.write_u32(111)
+    b := a
+    b.write_u32(222)
+    assert(a.len() == 4)
+    assert(b.len() == 8)
+
+    // Fall 2: `b` wird danach NICHT mehr gelesen -> 0-ns Auto-Move ohne Double-Free!
+    c := b
+    assert(c.len() == 8)
+
+    // Fall 3: Drop-on-Reassign in einer Schleife
+    msg := "Start"
+    for i in 0..500 {
+        msg = "Runde"
+    }
+    assert(msg.contains("Runde") == 1)
+    return c.len()
+}
+"#;
+        let prog = striv_syntax::Parser::new_with_dialect(odin_src, striv_syntax::Dialect::Odin)
+            .parse_program();
+        let mut jit = JitCompiler::new();
+        let ptr = jit.compile_program(&prog);
+        let f: fn() -> i64 = unsafe { std::mem::transmute(ptr) };
+        assert_eq!(f(), 8);
     }
 }
