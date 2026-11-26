@@ -164,6 +164,11 @@ function tokenizeCodeLine(line: string, kwSet: Set<string>, tySet: Set<string>):
           j++
         }
       }
+      if ((line[j] === 'e' || line[j] === 'E') && /[0-9+-]/.test(line[j + 1] ?? '')) {
+        j++
+        if (line[j] === '+' || line[j] === '-') j++
+        while (j < line.length && /[0-9_]/.test(line[j])) j++
+      }
       if (line[j] === '_' && /[a-zA-Z]/.test(line[j + 1] ?? '')) {
         j++
         while (j < line.length && /[a-zA-Z0-9_]/.test(line[j])) j++

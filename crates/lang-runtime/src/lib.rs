@@ -803,3 +803,48 @@ pub extern "C" fn striv_atan2(y: f64, x: f64) -> f64 {
 pub extern "C" fn striv_sqrt(x: f64) -> f64 {
     x.sqrt()
 }
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_abs(x: f64) -> f64 {
+    x.abs()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_acos(x: f64) -> f64 {
+    x.acos()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_asin(x: f64) -> f64 {
+    x.asin()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_atan(x: f64) -> f64 {
+    x.atan()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_sinh(x: f64) -> f64 {
+    x.sinh()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_cosh(x: f64) -> f64 {
+    x.cosh()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_asinh(x: f64) -> f64 {
+    x.asinh()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_atanh(x: f64) -> f64 {
+    x.atanh()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_rem_euclid(a: f64, b: f64) -> f64 {
+    a.rem_euclid(b)
+}

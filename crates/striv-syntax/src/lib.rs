@@ -441,12 +441,14 @@ pub enum Token {
     Proc,
     #[token(":=")]
     ColonAssign,
-    #[regex(r"[0-9]+(\.[0-9]+)?_[a-zA-Z][a-zA-Z0-9]*", |lex| {
+    #[regex(r"[0-9][0-9_]*(\.[0-9][0-9_]*)?([eE][+-]?[0-9][0-9_]*)?_[a-zA-Z][a-zA-Z0-9]*", |lex| {
         let s = lex.slice();
-        let (num_s, unit_s) = s.split_once('_').unwrap();
+        let unit_idx = s.rfind('_').unwrap();
+        let num_s = s[..unit_idx].replace('_', "");
+        let unit_s = &s[unit_idx + 1..];
         let val: f64 = num_s.parse().unwrap();
         (val, unit_s.to_string())
-    })]
+    }, priority = 5)]
     UnitFloat((f64, String)),
     #[token("Ok")]
     OkKw,
@@ -527,11 +529,13 @@ pub enum Token {
     #[token(">")]
     Gt,
 
-    #[regex("[0-9]+\\.[0-9]+", |lex| lex.slice().parse::<f64>().ok())]
+    #[regex(r"[0-9][0-9_]*(\.[0-9][0-9_]*)?[eE][+-]?[0-9][0-9_]*|[0-9][0-9_]*\.[0-9][0-9_]*", |lex| {
+        lex.slice().replace('_', "").parse::<f64>().ok()
+    }, priority = 4)]
     Float(f64),
     #[regex("0x[0-9a-fA-F]+", |lex| i64::from_str_radix(&lex.slice()[2..], 16).ok())]
     Hex(i64),
-    #[regex("[0-9]+", |lex| lex.slice().parse::<i64>().ok())]
+    #[regex(r"[0-9][0-9_]*", |lex| lex.slice().replace('_', "").parse::<i64>().ok(), priority = 3)]
     Int(i64),
 
     #[regex("[a-zA-Z_][a-zA-Z0-9_]*", |lex| lex.slice().to_string())]

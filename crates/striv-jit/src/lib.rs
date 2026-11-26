@@ -212,6 +212,7 @@ struct CompileEnv<'a> {
     loop_targets: Vec<(Block, Block)>,
     literals: &'a mut Vec<Box<[u8]>>,
     user_enums: &'a HashMap<String, i64>,
+    const_floats: &'a HashMap<String, f64>,
     enum_defs: &'a HashMap<String, striv_syntax::EnumDef>,
     structs: &'a HashMap<String, Box<StructDef>>,
     funcs: HashMap<String, (cranelift::codegen::ir::FuncRef, Vec<(String, bool)>)>,
@@ -374,6 +375,15 @@ impl JitCompiler {
         builder.symbol("striv_tan", lang_runtime::striv_tan as *const u8);
         builder.symbol("striv_atan2", lang_runtime::striv_atan2 as *const u8);
         builder.symbol("striv_sqrt", lang_runtime::striv_sqrt as *const u8);
+        builder.symbol("striv_abs", lang_runtime::striv_abs as *const u8);
+        builder.symbol("striv_acos", lang_runtime::striv_acos as *const u8);
+        builder.symbol("striv_asin", lang_runtime::striv_asin as *const u8);
+        builder.symbol("striv_atan", lang_runtime::striv_atan as *const u8);
+        builder.symbol("striv_sinh", lang_runtime::striv_sinh as *const u8);
+        builder.symbol("striv_cosh", lang_runtime::striv_cosh as *const u8);
+        builder.symbol("striv_asinh", lang_runtime::striv_asinh as *const u8);
+        builder.symbol("striv_atanh", lang_runtime::striv_atanh as *const u8);
+        builder.symbol("striv_rem_euclid", lang_runtime::striv_rem_euclid as *const u8);
         builder.symbol(
             "striv_par_for_svec",
             lang_runtime::striv_par_for_svec as *const u8,
@@ -747,10 +757,22 @@ impl JitCompiler {
             .module
             .declare_function("striv_sqrt", Linkage::Import, &sig_f1)
             .unwrap();
+        let abs_id = self.module.declare_function("striv_abs", Linkage::Import, &sig_f1).unwrap();
+        let acos_id = self.module.declare_function("striv_acos", Linkage::Import, &sig_f1).unwrap();
+        let asin_id = self.module.declare_function("striv_asin", Linkage::Import, &sig_f1).unwrap();
+        let atan_id = self.module.declare_function("striv_atan", Linkage::Import, &sig_f1).unwrap();
+        let sinh_id = self.module.declare_function("striv_sinh", Linkage::Import, &sig_f1).unwrap();
+        let cosh_id = self.module.declare_function("striv_cosh", Linkage::Import, &sig_f1).unwrap();
+        let asinh_id = self.module.declare_function("striv_asinh", Linkage::Import, &sig_f1).unwrap();
+        let atanh_id = self.module.declare_function("striv_atanh", Linkage::Import, &sig_f1).unwrap();
         let mut sig_f2 = self.module.make_signature();
         sig_f2.params.push(AbiParam::new(types::F64));
         sig_f2.params.push(AbiParam::new(types::F64));
         sig_f2.returns.push(AbiParam::new(types::F64));
+        let rem_euclid_id = self
+            .module
+            .declare_function("striv_rem_euclid", Linkage::Import, &sig_f2)
+            .unwrap();
         let atan2_id = self
             .module
             .declare_function("striv_atan2", Linkage::Import, &sig_f2)
@@ -855,7 +877,16 @@ impl JitCompiler {
                 user_enums.insert(format!("{}__{}", e.name, v.name), val);
             }
         }
+        let mut const_floats: HashMap<String, f64> = HashMap::new();
         if !prog.consts.is_empty() {
+            for (c_name, c_expr) in &prog.consts {
+        if matches!(c_expr, Expr::Float(_) | Expr::UnitFloat(_, _)) {
+            continue;
+        }
+                if let Expr::Float(v) | Expr::UnitFloat(v, _) = c_expr {
+                    const_floats.insert(c_name.clone(), *v);
+                }
+            }
             for (c_name, c_val) in eval_comptime_consts(prog) {
                 user_enums.insert(c_name, c_val);
             }
@@ -882,7 +913,13 @@ impl JitCompiler {
         let mut func_ids = Vec::new();
         let mut fn_ret_structs: HashMap<String, Option<String>> = HashMap::new();
         let mut fn_ret_handles: HashMap<String, String> = HashMap::new();
-        let mut fn_ret_floats: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut fn_ret_floats: std::collections::HashSet<String> = [
+            "sin", "cos", "tan", "sqrt", "atan2", "abs", "acos", "asin", "atan", "sinh", "cosh",
+            "asinh", "atanh", "rem_euclid",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
         for func in &all_functions {
             let ret_struct = func
                 .ret_type
@@ -1088,6 +1125,27 @@ impl JitCompiler {
                 funcs_map.insert("tan".to_string(), (tan_ref, vec![("float".into(), false)]));
                 let sqrt_ref = self.module.declare_func_in_func(sqrt_id, builder.func);
                 funcs_map.insert("sqrt".to_string(), (sqrt_ref, vec![("float".into(), false)]));
+                for (name, id) in [
+                    ("abs", abs_id),
+                    ("acos", acos_id),
+                    ("asin", asin_id),
+                    ("atan", atan_id),
+                    ("sinh", sinh_id),
+                    ("cosh", cosh_id),
+                    ("asinh", asinh_id),
+                    ("atanh", atanh_id),
+                ] {
+                    let r = self.module.declare_func_in_func(id, builder.func);
+                    funcs_map.insert(name.to_string(), (r, vec![("float".into(), false)]));
+                }
+                let rem_euclid_ref = self.module.declare_func_in_func(rem_euclid_id, builder.func);
+                funcs_map.insert(
+                    "rem_euclid".to_string(),
+                    (
+                        rem_euclid_ref,
+                        vec![("float".into(), false), ("float".into(), false)],
+                    ),
+                );
                 let atan2_ref = self.module.declare_func_in_func(atan2_id, builder.func);
                 funcs_map.insert(
                     "atan2".to_string(),
@@ -1286,6 +1344,7 @@ impl JitCompiler {
                     loop_targets: Vec::new(),
                     literals: &mut self.kept_literals,
                     user_enums: &user_enums,
+                    const_floats: &const_floats,
                     enum_defs: &enum_defs,
                     structs: &self.kept_structs,
                     funcs: funcs_map,
@@ -1635,7 +1694,9 @@ fn is_float_expr(expr: &Expr, vars: &HashMap<String, VarInfo>, env: &CompileEnv)
         Expr::Float(_) | Expr::UnitFloat(_, _) => true,
         Expr::MethodCall { method, .. } if method == "read_f64" => true,
         Expr::Call { name, .. } if env.fn_ret_floats.contains(name) => true,
-        Expr::Var(n) => matches!(vars.get(n), Some(VarInfo::Float { .. })),
+        Expr::Var(n) => {
+            matches!(vars.get(n), Some(VarInfo::Float { .. })) || env.const_floats.contains_key(n)
+        }
         Expr::FieldAccess { var, field } => match vars.get(var) {
             Some(VarInfo::Struct { struct_name, .. })
             | Some(VarInfo::StructPtr { struct_name, .. }) => {
@@ -4222,6 +4283,9 @@ fn compile_expr(
             }
             Some(VarInfo::Bytes { var, .. }) => builder.use_var(*var),
             _ => {
+                if let Some(&fv) = env.const_floats.get(name) {
+                    return builder.ins().f64const(fv);
+                }
                 if let Some(&c_val) = env.user_enums.get(name) {
                     builder.ins().iconst(env.int_ty, c_val)
                 } else {
@@ -4868,6 +4932,9 @@ fn tuple_field_index(field: &str) -> Option<usize> {
 pub fn eval_comptime_consts(prog: &Program) -> HashMap<String, i64> {
     let mut const_vals = HashMap::new();
     for (c_name, c_expr) in &prog.consts {
+        if matches!(c_expr, Expr::Float(_) | Expr::UnitFloat(_, _)) {
+            continue;
+        }
         let mut funcs: Vec<striv_syntax::Function> = prog
             .functions
             .iter()
@@ -5725,5 +5792,28 @@ main :: proc() -> int {{
         let f: fn() -> i64 = unsafe { std::mem::transmute(ptr) };
         assert_eq!(f(), 1);
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_scientific_notation_and_kepler_intrinsics() {
+        let src = r#"
+const G = 6.67430e-11
+fn main() -> int {
+    let mu = 3.986e14
+    let r = 7_000_000.0
+    let v = sqrt(mu / r)
+    assert(abs(v - 7546.05329) < 1e-3)
+    assert(abs(acos(1.0)) < 1e-10)
+    assert(abs(rem_euclid(7.5, 2.0) - 1.5) < 1e-10)
+    assert(abs(sinh(0.0)) < 1e-10)
+    assert(abs(cosh(0.0) - 1.0) < 1e-10)
+    return 1
+}
+"#;
+        let prog = striv_syntax::Parser::new(src).parse_program();
+        let mut jit = JitCompiler::new();
+        let ptr = jit.compile_program(&prog);
+        let f: fn() -> i64 = unsafe { std::mem::transmute(ptr) };
+        assert_eq!(f(), 1);
     }
 }

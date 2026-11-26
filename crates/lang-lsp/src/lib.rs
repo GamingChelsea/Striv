@@ -850,6 +850,32 @@ impl LanguageServer for StrivLsp {
             sort_text: Some("1_print".to_string()),
             ..Default::default()
         });
+        for (fn_name, snip, detail) in [
+            ("sin", "sin(${1:x})", "fn sin(x: float) -> float"),
+            ("cos", "cos(${1:x})", "fn cos(x: float) -> float"),
+            ("tan", "tan(${1:x})", "fn tan(x: float) -> float"),
+            ("atan2", "atan2(${1:y}, ${2:x})", "fn atan2(y: float, x: float) -> float"),
+            ("sqrt", "sqrt(${1:x})", "fn sqrt(x: float) -> float"),
+            ("abs", "abs(${1:x})", "fn abs(x: float) -> float"),
+            ("acos", "acos(${1:x})", "fn acos(x: float) -> float"),
+            ("asin", "asin(${1:x})", "fn asin(x: float) -> float"),
+            ("atan", "atan(${1:x})", "fn atan(x: float) -> float"),
+            ("sinh", "sinh(${1:x})", "fn sinh(x: float) -> float"),
+            ("cosh", "cosh(${1:x})", "fn cosh(x: float) -> float"),
+            ("asinh", "asinh(${1:x})", "fn asinh(x: float) -> float"),
+            ("atanh", "atanh(${1:x})", "fn atanh(x: float) -> float"),
+            ("rem_euclid", "rem_euclid(${1:a}, ${2:b})", "fn rem_euclid(a: float, b: float) -> float"),
+        ] {
+            items.push(CompletionItem {
+                label: fn_name.to_string(),
+                kind: Some(CompletionItemKind::FUNCTION),
+                insert_text: Some(snip.to_string()),
+                insert_text_format: Some(InsertTextFormat::SNIPPET),
+                detail: Some(detail.to_string()),
+                sort_text: Some(format!("1_{}", fn_name)),
+                ..Default::default()
+            });
+        }
         for (kw, snip, detail) in [
             ("Ok", "Ok($0)", "Result::Ok(val)"),
             ("Err", "Err($0)", "Result::Err(err)"),
