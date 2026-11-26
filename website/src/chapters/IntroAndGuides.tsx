@@ -5,7 +5,7 @@ import { ChapterProps, DocH1, DocH2, DocH3, DocP, DocTable } from './DocPrimitiv
 export function OverviewChapter({ dialect, theme, lang }: ChapterProps) {
   return (
     <div className="space-y-6">
-      <DocH1>{tr(lang, 'Striv 1.0 — Language Documentation', 'Striv 1.0 — Sprachdokumentation')}</DocH1>
+      <DocH1>{tr(lang, 'Striv 1.2 — Language Documentation', 'Striv 1.2 — Sprachdokumentation')}</DocH1>
       <DocP theme={theme}>
         {tr(
           lang,

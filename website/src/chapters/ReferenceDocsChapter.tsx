@@ -45,6 +45,89 @@ const MAX_HP = 100`,
 MAX_HP :: 100`,
   },
   {
+    id: 'kw-declare',
+    name: 'x: Type (Zero-Init)',
+    category: 'keyword',
+    signature: 'x: Type  (Odin)  |  let mut x: int = null  (Rust)',
+    summary: {
+      en: 'Pure type declarations without = are initialized by the JIT: primitives to 0/0.0, structs with default fields, containers via ::new(), and external handles to 0 (null).',
+      de: 'Reine Typ-Deklarationen ohne = werden vom JIT typgesteuert initialisiert: Primitive auf 0/0.0, Structs inkl. Default-Feldern, Container per ::new() und externe Handles auf 0 (null).',
+    },
+    rustCode: `let mut tex = null
+if !tex.is_valid() { tex = 42 }`,
+    odinCode: `ship: Ship
+items: Vec
+tex: TextureHandle`,
+  },
+  {
+    id: 'kw-struct',
+    name: 'struct',
+    category: 'keyword',
+    signature: 'struct Name { field: T = default }  |  Name :: struct { ... }',
+    summary: {
+      en: 'Value-type data structure stored on the stack with optional default field values and sync field modifiers.',
+      de: 'Werttyp-Datenstruktur auf dem Stack mit optionalen Default-Feldwerten und sync-Feldmodifikatoren.',
+    },
+    rustCode: `struct Ship {
+    x: float = 0.0,
+    hp: int = 100,
+}`,
+    odinCode: `Ship :: struct {
+    x: float = 0.0,
+    hp: int = 100,
+}`,
+  },
+  {
+    id: 'kw-enum',
+    name: 'enum / open enum / extend enum',
+    category: 'keyword',
+    signature: 'open enum Name { A, B }  |  extend enum Name { C }',
+    summary: {
+      en: 'Supports algebraic payload enums and modding-safe open enums where every variant receives a stable 64-bit FNV-1a hash.',
+      de: 'Unterstützt algebraische Payload-Enums sowie modding-sichere open enums, bei denen jede Variante einen stabilen 64-Bit FNV-1a-Hash erhält.',
+    },
+    rustCode: `open enum Resource { LiquidFuel, Oxidizer }
+extend enum Resource { Uranium }`,
+    odinCode: `Resource :: open enum { LiquidFuel, Oxidizer }
+Resource :: extend enum { Uranium }`,
+  },
+  {
+    id: 'kw-defer',
+    name: 'defer',
+    category: 'keyword',
+    signature: 'defer <stmt>',
+    summary: {
+      en: 'Schedules a statement to execute in LIFO order when the current function or scope exits.',
+      de: 'Führt ein Statement beim Verlassen der aktuellen Funktion bzw. des Scopes in LIFO-Reihenfolge aus.',
+    },
+    rustCode: `fn work() {
+    defer print("Cleanup!")
+    print("Working...")
+}`,
+    odinCode: `work :: proc() {
+    defer print("Cleanup!")
+    print("Working...")
+}`,
+  },
+  {
+    id: 'kw-unit',
+    name: 'unit',
+    category: 'keyword',
+    signature: 'unit m  |  unit Velocity = m / s',
+    summary: {
+      en: 'Compile-time physical unit & dimensional analysis. Erased to native f64 registers with 0 ns runtime overhead.',
+      de: 'Compile-Time-Dimensionsprüfung für physikalische Einheiten. Wird nach der Prüfung komplett zu nativen f64-Registern gelöscht (0 ns Overhead).',
+    },
+    rustCode: `unit m
+unit s
+unit Velocity = m / s
+let v: Velocity = 100.0_m / 2.0_s`,
+    odinCode: `unit m
+unit s
+unit Velocity = m / s
+v : Velocity = 100.0_m / 2.0_s`,
+  },
+  {
     id: 'kw-foreign-extern',
     name: 'foreign / extern',
     category: 'keyword',
@@ -91,6 +174,22 @@ if !tex.is_valid() {
 rpc fn fire(power: float) {}`,
     odinCode: `Ship :: struct { sync x: float }
 fire :: rpc proc(power: float) {}`,
+  },
+  {
+    id: 'kw-concurrent-shared',
+    name: 'concurrent / spawn / shared / lock',
+    category: 'keyword',
+    signature: 'concurrent { spawn f(x) }  |  shared x = ...  |  lock x { ... }',
+    summary: {
+      en: 'Structured concurrency: concurrent joins all spawned threads at block end; shared allocates a mutex-protected box accessed safely inside lock blocks.',
+      de: 'Structured Concurrency: concurrent wartet am Blockende auf alle spawn-Threads; shared legt eine mutex-geschützte Box an, die über lock sicher bearbeitet wird.',
+    },
+    rustCode: `shared c = Counter { hits: 0 }
+concurrent { spawn worker(c) }
+lock c { print("{c.hits}") }`,
+    odinCode: `shared c = Counter { hits: 0 }
+concurrent { spawn worker(c) }
+lock c { print("{c.hits}") }`,
   },
   {
     id: 'kw-query',
@@ -154,12 +253,12 @@ n := strlen("Striv")`,
   },
   {
     id: 'type-bytes-vec',
-    name: 'Bytes / Vec<T>',
+    name: 'Bytes / Vec<T> / String',
     category: 'type',
-    signature: 'Bytes::new()  |  Vec<T>',
+    signature: 'Bytes::new()  |  Vec<T>  |  String',
     summary: {
-      en: 'Heap-allocated binary buffer and typed dynamic array with Smart Auto-Move/Auto-Clone (no .clone() needed) and RAII cleanup.',
-      de: 'Heap-allozierter Binärpuffer und typisiertes dynamisches Array mit Smart Auto-Move/Auto-Clone (kein .clone() nötig) und RAII-Cleanup.',
+      en: 'Heap-allocated containers with Smart Auto-Move/Auto-Clone (no .clone() needed), Drop-on-Reassign, and RAII cleanup.',
+      de: 'Heap-allozierte Container mit Smart Auto-Move/Auto-Clone (kein .clone() nötig), Drop-on-Reassign und RAII-Cleanup.',
     },
     rustCode: `let mut buf = Bytes::new()
 buf.write_u32(123)
@@ -233,12 +332,12 @@ export function ReferenceDocsChapter({ dialect, theme, lang }: ChapterProps) {
       </DocP>
 
       <div
-        className={`grid grid-cols-1 md:grid-cols-[240px_1fr] rounded border overflow-hidden ${
+        className={`grid grid-cols-1 md:grid-cols-[270px_1fr] min-h-[540px] rounded border overflow-hidden ${
           isDark ? 'border-zinc-800 bg-[#12151a]' : 'border-zinc-200 bg-white'
         }`}
       >
         <aside
-          className={`border-b md:border-b-0 md:border-r p-3 space-y-4 ${
+          className={`border-b md:border-b-0 md:border-r p-4 space-y-5 ${
             isDark ? 'border-zinc-800 bg-zinc-900/40' : 'border-zinc-200 bg-zinc-50/70'
           }`}
         >
@@ -247,7 +346,7 @@ export function ReferenceDocsChapter({ dialect, theme, lang }: ChapterProps) {
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
             placeholder={tr(lang, 'Filter reference...', 'Referenz filtern...')}
-            className={`w-full px-2.5 py-1.5 text-xs rounded border focus:outline-none ${
+            className={`w-full px-3 py-2 text-xs rounded border focus:outline-none ${
               isDark
                 ? 'border-zinc-700 bg-zinc-900 text-zinc-100 placeholder:text-zinc-500'
                 : 'border-zinc-300 bg-white text-zinc-900 placeholder:text-zinc-400'
@@ -258,7 +357,7 @@ export function ReferenceDocsChapter({ dialect, theme, lang }: ChapterProps) {
             if (items.length === 0) return null
             return (
               <div key={g.key} className="space-y-1">
-                <div className="px-2 text-[10px] font-mono uppercase tracking-wider text-zinc-500">
+                <div className="px-2 text-[11px] font-mono uppercase tracking-wider text-zinc-500">
                   {g.label[lang]}
                 </div>
                 {items.map((item) => {
@@ -268,7 +367,7 @@ export function ReferenceDocsChapter({ dialect, theme, lang }: ChapterProps) {
                       key={item.id}
                       type="button"
                       onClick={() => setSelectedId(item.id)}
-                      className={`w-full text-left px-2.5 py-1.5 rounded text-xs font-mono transition-colors cursor-pointer ${
+                      className={`w-full text-left px-3 py-2 rounded text-xs font-mono transition-colors cursor-pointer ${
                         active
                           ? isDark
                             ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
@@ -287,8 +386,8 @@ export function ReferenceDocsChapter({ dialect, theme, lang }: ChapterProps) {
           })}
         </aside>
 
-        <div className="p-5 space-y-4 min-w-0">
-          <div className="flex flex-wrap items-center gap-2">
+        <div className="p-6 space-y-5 min-w-0">
+          <div className="flex flex-wrap items-center gap-2.5">
             <span
               className={`text-[11px] font-mono px-2 py-0.5 rounded border ${
                 isDark
@@ -298,11 +397,11 @@ export function ReferenceDocsChapter({ dialect, theme, lang }: ChapterProps) {
             >
               {selected.category}
             </span>
-            <h2 className="text-lg font-mono font-semibold">{selected.name}</h2>
+            <h2 className="text-xl font-mono font-semibold">{selected.name}</h2>
           </div>
 
           <div
-            className={`px-3 py-2 rounded border text-xs font-mono overflow-x-auto ${
+            className={`px-3.5 py-2.5 rounded border text-xs font-mono overflow-x-auto ${
               isDark
                 ? 'border-zinc-800 bg-zinc-900/70 text-zinc-200'
                 : 'border-zinc-200 bg-zinc-50 text-zinc-800'
