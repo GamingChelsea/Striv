@@ -1,0 +1,55 @@
+name: Build & Release striv.exe + LSP
+
+on:
+  tags:
+    - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Use standard MSVC linker on GitHub Runner
+        shell: pwsh
+        run: |
+          if (Test-Path .cargo/config.toml) {
+            Remove-Item -Force .cargo/config.toml
+          }
+
+      - name: Run Workspace Tests
+        run: cargo test --workspace --release
+
+      - name: Build striv.exe (Release, inkl. striv lsp)
+        run: cargo build --release -p striv-cli
+
+      - name: Package striv.exe & VS Code LSP Extension
+        shell: pwsh
+        run: |
+          Copy-Item target/release/striv-cli.exe striv.exe -Force
+          Compress-Archive -Path vscode-ext/extension.js, vscode-ext/language-configuration.json, vscode-ext/package.json, vscode-ext/package-lock.json, vscode-ext/syntaxes.json -DestinationPath striv-vscode-ext.zip -Force
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: striv-windows-x86_64
+          path: |
+            striv.exe
+            striv-vscode-ext.zip
+
+      - name: Publish GitHub Release (on tag)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            striv.exe
+            striv-vscode-ext.zip
+          generate_release_notes: true
