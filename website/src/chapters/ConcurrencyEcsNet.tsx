@@ -21,6 +21,13 @@ export function ConcurrencyChapter({ dialect, theme, lang }: ChapterProps) {
       <DocH2 id="shared-lock" theme={theme}>
         shared &amp; lock
       </DocH2>
+      <DocP theme={theme}>
+        {tr(
+          lang,
+          'shared allocates a thread-safe mutex-protected box (SharedBox) on the heap. Any thread can receive a shared parameter, and lock var { ... } acquires the mutex for exclusive read/write access.',
+          'shared legt eine threadsichere, mutex-geschützte Box (SharedBox) auf dem Heap an. Jeder Thread kann einen shared-Parameter entgegennehmen, und lock var { ... } sperrt den Mutex für exklusiven Lese- und Schreibzugriff.',
+        )}
+      </DocP>
       <CodeBlock
         dialect={dialect}
         theme={theme}

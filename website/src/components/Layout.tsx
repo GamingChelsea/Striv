@@ -99,8 +99,25 @@ export function Layout({
             </button>
           </div>
 
-          {/* Right Controls: Search, EN/DE, Light/Dark, Rust/Odin */}
+          {/* Right Controls: Reference, Search, EN/DE, Light/Dark, Rust/Odin */}
           <div className="flex items-center gap-2">
+            {/* 0. Reference Docs (Rustdoc) */}
+            <button
+              type="button"
+              onClick={() => onNavigate('reference')}
+              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded border text-xs font-medium transition-colors cursor-pointer ${
+                activeChapter === 'reference'
+                  ? isDark
+                    ? 'border-amber-500/60 bg-amber-500/15 text-amber-300'
+                    : 'border-amber-400 bg-amber-50 text-amber-800'
+                  : isDark
+                    ? 'border-zinc-800 bg-zinc-900/90 hover:border-zinc-700 text-zinc-200'
+                    : 'border-zinc-200 bg-white hover:border-zinc-300 text-zinc-700'
+              }`}
+            >
+              <span>{tr(lang, 'Reference Docs', 'Referenz-Docs')}</span>
+            </button>
+
             {/* 1. Search */}
             <button
               type="button"
