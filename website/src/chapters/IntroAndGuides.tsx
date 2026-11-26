@@ -448,6 +448,40 @@ striv switch-syntax odin src/main.strv`}
 }`}
       />
 
+      <DocH2 id="smart-move-clone" theme={theme}>
+        {tr(lang, 'Smart Auto-Move / Auto-Clone & Drop-on-Reassign', 'Smart Auto-Move / Auto-Clone & Drop-on-Reassign')}
+      </DocH2>
+      <DocP theme={theme}>
+        {tr(
+          lang,
+          'You never need to type .clone() for heap containers (Bytes, Vec, String). The compiler performs last-use analysis: if a is read again later, b := a automatically clones; if it is the last use, b := a performs a 0-ns move. Reassigning a = ... frees the old memory immediately, and assigning null to built-in containers is rejected by both the compiler and LSP.',
+          'Für Heap-Container (Bytes, Vec, String) musst du niemals .clone() tippen. Der Compiler prüft per Last-Use-Analyse: Wird a weiter unten noch gelesen, klont b := a automatisch; bei der letzten Nutzung erfolgt ein 0-ns-Move. Neuzuweisungen (a = ...) geben alten Speicher sofort frei (Drop-on-Reassign), und null auf eingebauten Containern wird von Compiler & LSP blockiert.',
+        )}
+      </DocP>
+      <CodeBlock
+        dialect={dialect}
+        theme={theme}
+        filename="smart_move_clone.strv"
+        code={`fn demo() -> int {
+    let a = Bytes::new()
+    a.write_u32(111)
+    let b = a // a is read below -> Auto-Clone!
+    b.write_u32(222)
+    assert(a.len() == 4)
+    let c = b // last use of b -> 0-ns Auto-Move!
+    return c.len()
+}`}
+        odinCode={`demo :: proc() -> int {
+    a := Bytes::new()
+    a.write_u32(111)
+    b := a // a wird unten gelesen -> Auto-Clone!
+    b.write_u32(222)
+    assert(a.len() == 4)
+    c := b // letzte Nutzung von b -> 0-ns Auto-Move!
+    return c.len()
+}`}
+      />
+
       <DocH2 id="odin-examples" theme={theme}>
         {tr(lang, 'Odin-Style Examples', 'Odin-Beispiele')}
       </DocH2>
