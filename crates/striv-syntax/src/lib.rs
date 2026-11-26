@@ -1600,7 +1600,7 @@ impl Parser {
                     return Stmt::Let {
                         name,
                         ty_hint: None,
-                        is_mut: false,
+                        is_mut: true,
                         value: self.parse_expr(),
                     };
                 }
@@ -1611,7 +1611,7 @@ impl Parser {
                     return Stmt::Let {
                         name,
                         ty_hint: Some(ty),
-                        is_mut: false,
+                        is_mut: true,
                         value: self.parse_expr(),
                     };
                 }
