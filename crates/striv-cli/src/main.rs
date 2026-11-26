@@ -172,58 +172,60 @@ fn main() {
         "dev" => {
             let path = args
                 .get(2)
-                .expect("Please provide a file: striv-cli dev test.strv");
+                .expect("Please provide a file: striv dev src/main.strv");
 
             lang_runtime::start_tweak_server();
-
-            // Persistent state owned by the host (up to 64 i64 fields, preserved across reloads)
-            let mut persistent_state = vec![0i64; 64];
             let mut last_modified = fs::metadata(path).and_then(|m| m.modified()).ok();
 
-            let compile_fresh = |p: &str| -> Option<(JitCompiler, fn(*mut i64, i64) -> i64)> {
-                let src = fs::read_to_string(p).ok()?;
-                let errs = striv_syntax::check_diagnostics(&src);
+            let run_once = |p: &str| {
+                let src = match fs::read_to_string(p) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        println!("[Striv] Could not read '{}': {}", p, e);
+                        return;
+                    }
+                };
+                let dialect = if fs::read_to_string("striv.toml")
+                    .unwrap_or_default()
+                    .contains("syntax = \"odin\"")
+                {
+                    striv_syntax::Dialect::Odin
+                } else {
+                    striv_syntax::Dialect::Rust
+                };
+                let errs = striv_syntax::check_diagnostics_with_dialect(&src, dialect);
                 if !errs.is_empty() {
                     println!("[Striv] Waiting for fix: {}", errs[0].message);
-                    return None;
+                    return;
                 }
                 let start = Instant::now();
-                let prog = striv_syntax::load_program_with_imports(std::path::Path::new(p)).ok()?;
+                let prog = match striv_syntax::load_program_with_imports(std::path::Path::new(p)) {
+                    Ok(pr) => pr,
+                    Err(e) => {
+                        println!("[Striv] Error: {}", e);
+                        return;
+                    }
+                };
                 let mut jit = JitCompiler::new();
                 let ptr = jit.compile_program(&prog);
-                println!("[Striv] Hot-Reloaded in {:?}", start.elapsed());
-                let func: fn(*mut i64, i64) -> i64 = unsafe { mem::transmute(ptr) };
-                Some((jit, func))
+                println!("[Striv] Compiled in {:?} -> running...", start.elapsed());
+                let main_fn: fn() -> i64 = unsafe { mem::transmute(ptr) };
+                let _ = main_fn();
             };
 
-            let mut current = compile_fresh(path);
-            if current.is_none() {
-                println!("Please fix syntax errors in '{}' and save...", path);
-            }
-
-            let win_handle = lang_runtime::create_host_window("Striv Live Engine", 800, 600);
-            persistent_state[0] = 350.0_f64.to_bits() as i64;
-            persistent_state[1] = 250.0_f64.to_bits() as i64;
-
             println!(
-                "[Striv] Dev-Loop running! Edit '{}' in VS Code and press Ctrl+S!",
+                "[Striv] Dev-Watcher running! Edit '{}' and press Ctrl+S to re-run (Ctrl+C to stop).",
                 path
             );
-            while lang_runtime::present_host_window(win_handle) {
+            run_once(path);
+            loop {
+                std::thread::sleep(std::time::Duration::from_millis(120));
                 let now_mod = fs::metadata(path).and_then(|m| m.modified()).ok();
                 if now_mod != last_modified {
                     last_modified = now_mod;
                     std::thread::sleep(std::time::Duration::from_millis(20));
-                    if let Some(new_compiled) = compile_fresh(path) {
-                        current = Some(new_compiled);
-                    }
+                    run_once(path);
                 }
-
-                if let Some((_jit_guard, update_fn)) = &current {
-                    update_fn(persistent_state.as_mut_ptr(), win_handle);
-                }
-
-                std::thread::sleep(std::time::Duration::from_millis(16));
             }
         }
         "live" => {

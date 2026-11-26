@@ -299,6 +299,28 @@ mods.tick(ecs, 0.016)`,
 mods.init(ecs)
 mods.tick(ecs, 0.016)`,
   },
+  {
+    id: 'mod-window',
+    name: 'Window',
+    category: 'module',
+    signature: 'Window::new(title, w, h), is_open(), clear(rgb), draw_rect(x, y, w, h, rgb), present()',
+    summary: {
+      en: 'Built-in 2D framebuffer window (powered by minifb) for instant prototyping, orbit maps, and debug views. For full 3D GPU games, use foreign "raylib.dll" / "SDL3.dll" or striv add wgpu.',
+      de: 'Eingebautes 2D-Framebuffer-Fenster (via minifb) für sofortiges Prototyping, Orbit-Karten und Debug-Ansichten. Für aufwendige 3D-GPU-Spiele nutze foreign "raylib.dll" / "SDL3.dll" oder striv add wgpu.',
+    },
+    rustCode: `let win = Window::new("Space Engine", 1280, 720)
+while win.is_open() {
+    win.clear(0x0B0E14)
+    win.draw_rect(100, 100, 40, 40, 0xFFAA00)
+    win.present()
+}`,
+    odinCode: `win := Window::new("Space Engine", 1280, 720)
+while win.is_open() {
+    win.clear(0x0B0E14)
+    win.draw_rect(100, 100, 40, 40, 0xFFAA00)
+    win.present()
+}`,
+  },
 ]
 
 export function ReferenceDocsChapter({ dialect, theme, lang }: ChapterProps) {

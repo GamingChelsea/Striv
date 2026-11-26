@@ -389,6 +389,25 @@ impl LanguageServer for StrivLsp {
                 });
                 return Ok(Some(CompletionResponse::Array(items)));
             }
+            if visible.iter().any(|(n, ty)| n == &var_name && ty == "Window") {
+                for (m, snip, det) in [
+                    ("is_open", "is_open()", "fn is_open() -> bool"),
+                    ("clear", "clear(${1:0x0B0E14})", "fn clear(rgb: int)"),
+                    ("draw_rect", "draw_rect(${1:x}, ${2:y}, ${3:w}, ${4:h}, ${5:0xFFAA00})", "fn draw_rect(x: int, y: int, w: int, h: int, rgb: int)"),
+                    ("present", "present()", "fn present() -> bool"),
+                ] {
+                    items.push(CompletionItem {
+                        label: m.to_string(),
+                        kind: Some(CompletionItemKind::METHOD),
+                        insert_text: Some(snip.to_string()),
+                        insert_text_format: Some(InsertTextFormat::SNIPPET),
+                        detail: Some(det.to_string()),
+                        sort_text: Some(format!("0_{}", m)),
+                        ..Default::default()
+                    });
+                }
+                return Ok(Some(CompletionResponse::Array(items)));
+            }
             if visible.iter().any(|(n, ty)| n == &var_name && ty == "Mods") {
                 for (m, snip, det) in [
                     ("count", "count()", "fn count() -> int"),
@@ -443,6 +462,25 @@ impl LanguageServer for StrivLsp {
                     ("read_u32", "read_u32(${1:offset})", "fn read_u32(offset: int) -> int"),
                     ("read_i64", "read_i64(${1:offset})", "fn read_i64(offset: int) -> int"),
                     ("read_f64", "read_f64(${1:offset})", "fn read_f64(offset: int) -> float"),
+                ] {
+                    items.push(CompletionItem {
+                        label: m.to_string(),
+                        kind: Some(CompletionItemKind::METHOD),
+                        insert_text: Some(snip.to_string()),
+                        insert_text_format: Some(InsertTextFormat::SNIPPET),
+                        detail: Some(det.to_string()),
+                        sort_text: Some(format!("0_{}", m)),
+                        ..Default::default()
+                    });
+                }
+                return Ok(Some(CompletionResponse::Array(items)));
+            }
+            if visible.iter().any(|(n, ty)| n == &var_name && ty == "Window") {
+                for (m, snip, det) in [
+                    ("is_open", "is_open()", "fn is_open() -> bool"),
+                    ("clear", "clear(${1:0x0B0E14})", "fn clear(rgb: int)"),
+                    ("draw_rect", "draw_rect(${1:x}, ${2:y}, ${3:w}, ${4:h}, ${5:0xFFAA00})", "fn draw_rect(x: int, y: int, w: int, h: int, rgb: int)"),
+                    ("present", "present()", "fn present() -> bool"),
                 ] {
                     items.push(CompletionItem {
                         label: m.to_string(),
@@ -527,6 +565,25 @@ impl LanguageServer for StrivLsp {
                         kind: Some(CompletionItemKind::FIELD),
                         detail: Some(format!("color .{}", idx)),
                         sort_text: Some(format!("2_{}_{}", i, swiz)),
+                        ..Default::default()
+                    });
+                }
+                return Ok(Some(CompletionResponse::Array(items)));
+            }
+            if visible.iter().any(|(n, ty)| n == &var_name && ty == "Window") {
+                for (m, snip, det) in [
+                    ("is_open", "is_open()", "fn is_open() -> bool"),
+                    ("clear", "clear(${1:0x0B0E14})", "fn clear(rgb: int)"),
+                    ("draw_rect", "draw_rect(${1:x}, ${2:y}, ${3:w}, ${4:h}, ${5:0xFFAA00})", "fn draw_rect(x: int, y: int, w: int, h: int, rgb: int)"),
+                    ("present", "present()", "fn present() -> bool"),
+                ] {
+                    items.push(CompletionItem {
+                        label: m.to_string(),
+                        kind: Some(CompletionItemKind::METHOD),
+                        insert_text: Some(snip.to_string()),
+                        insert_text_format: Some(InsertTextFormat::SNIPPET),
+                        detail: Some(det.to_string()),
+                        sort_text: Some(format!("0_{}", m)),
                         ..Default::default()
                     });
                 }

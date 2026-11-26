@@ -634,6 +634,70 @@ pub fn present_host_window(handle_bits: i64) -> bool {
     })
 }
 
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_window_new(title_ptr: *const String, width: i64, height: i64) -> i64 {
+    let title = if title_ptr.is_null() {
+        "Striv Window"
+    } else {
+        unsafe { (*title_ptr).as_str() }
+    };
+    create_host_window(title, width.max(1) as usize, height.max(1) as usize)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_window_is_open(handle_bits: i64) -> i64 {
+    let handle = WinHandle::from(KeyData::from_ffi(handle_bits as u64));
+    WINDOWS.with(|w| {
+        let map = w.borrow();
+        map.get(handle)
+            .is_some_and(|hw| hw.win.is_open() && !hw.win.is_key_down(Key::Escape)) as i64
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_window_clear(handle_bits: i64, rgb: i64) -> i64 {
+    let handle = WinHandle::from(KeyData::from_ffi(handle_bits as u64));
+    WINDOWS.with(|w| {
+        if let Some(hw) = w.borrow_mut().get_mut(handle) {
+            hw.buffer.fill(rgb as u32);
+        }
+    });
+    0
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_window_draw_rect(
+    handle_bits: i64,
+    x: i64,
+    y: i64,
+    rw: i64,
+    rh: i64,
+    rgb: i64,
+) -> i64 {
+    let handle = WinHandle::from(KeyData::from_ffi(handle_bits as u64));
+    WINDOWS.with(|w| {
+        if let Some(hw) = w.borrow_mut().get_mut(handle) {
+            let x0 = x.max(0) as usize;
+            let y0 = y.max(0) as usize;
+            let x1 = (x + rw).clamp(0, hw.width as i64) as usize;
+            let y1 = (y + rh).clamp(0, hw.height as i64) as usize;
+            let col = rgb as u32;
+            for py in y0..y1 {
+                let row = py * hw.width;
+                for px in x0..x1 {
+                    hw.buffer[row + px] = col;
+                }
+            }
+        }
+    });
+    0
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_window_present(handle_bits: i64) -> i64 {
+    present_host_window(handle_bits) as i64
+}
+
 use std::cell::Cell;
 
 thread_local! {
