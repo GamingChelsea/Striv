@@ -386,6 +386,29 @@ impl LanguageServer for StrivLsp {
                 });
                 return Ok(Some(CompletionResponse::Array(items)));
             }
+            if visible.iter().any(|(n, ty)| n == &var_name && ty == "Ecs") {
+                for (m, snip, det) in [
+                    ("spawn", "spawn()", "fn spawn() -> int"),
+                    ("set", "set(${1:ent}, ${2:Comp { ... }})", "fn set(ent: int, comp: T)"),
+                    ("remove_entity", "remove_entity(${1:ent})", "fn remove_entity(ent: int) (cascade)"),
+                    ("set_parent", "set_parent(${1:child}, ${2:parent})", "fn set_parent(child: int, parent: int)"),
+                    ("detach", "detach(${1:child})", "fn detach(child: int)"),
+                    ("parent_of", "parent_of(${1:child})", "fn parent_of(child: int) -> int"),
+                    ("has", "has(${1:ent}, ${2:Comp})", "fn has(ent: int, Comp) -> int"),
+                    ("remove_comp", "remove_comp(${1:ent}, ${2:Comp})", "fn remove_comp(ent: int, Comp) -> int"),
+                ] {
+                    items.push(CompletionItem {
+                        label: m.to_string(),
+                        kind: Some(CompletionItemKind::METHOD),
+                        insert_text: Some(snip.to_string()),
+                        insert_text_format: Some(InsertTextFormat::SNIPPET),
+                        detail: Some(det.to_string()),
+                        sort_text: Some(format!("0_{}", m)),
+                        ..Default::default()
+                    });
+                }
+                return Ok(Some(CompletionResponse::Array(items)));
+            }
             if visible
                 .iter()
                 .any(|(n, ty)| n == &var_name && ty == "Bytes")
@@ -399,6 +422,29 @@ impl LanguageServer for StrivLsp {
                     ("read_u32", "read_u32(${1:offset})", "fn read_u32(offset: int) -> int"),
                     ("read_i64", "read_i64(${1:offset})", "fn read_i64(offset: int) -> int"),
                     ("read_f64", "read_f64(${1:offset})", "fn read_f64(offset: int) -> float"),
+                ] {
+                    items.push(CompletionItem {
+                        label: m.to_string(),
+                        kind: Some(CompletionItemKind::METHOD),
+                        insert_text: Some(snip.to_string()),
+                        insert_text_format: Some(InsertTextFormat::SNIPPET),
+                        detail: Some(det.to_string()),
+                        sort_text: Some(format!("0_{}", m)),
+                        ..Default::default()
+                    });
+                }
+                return Ok(Some(CompletionResponse::Array(items)));
+            }
+            if visible.iter().any(|(n, ty)| n == &var_name && ty == "Ecs") {
+                for (m, snip, det) in [
+                    ("spawn", "spawn()", "fn spawn() -> int"),
+                    ("set", "set(${1:ent}, ${2:Comp { ... }})", "fn set(ent: int, comp: T)"),
+                    ("remove_entity", "remove_entity(${1:ent})", "fn remove_entity(ent: int) (cascade)"),
+                    ("set_parent", "set_parent(${1:child}, ${2:parent})", "fn set_parent(child: int, parent: int)"),
+                    ("detach", "detach(${1:child})", "fn detach(child: int)"),
+                    ("parent_of", "parent_of(${1:child})", "fn parent_of(child: int) -> int"),
+                    ("has", "has(${1:ent}, ${2:Comp})", "fn has(ent: int, Comp) -> int"),
+                    ("remove_comp", "remove_comp(${1:ent}, ${2:Comp})", "fn remove_comp(ent: int, Comp) -> int"),
                 ] {
                     items.push(CompletionItem {
                         label: m.to_string(),
@@ -442,6 +488,29 @@ impl LanguageServer for StrivLsp {
                         kind: Some(CompletionItemKind::FIELD),
                         detail: Some(format!("color .{}", idx)),
                         sort_text: Some(format!("2_{}_{}", i, swiz)),
+                        ..Default::default()
+                    });
+                }
+                return Ok(Some(CompletionResponse::Array(items)));
+            }
+            if visible.iter().any(|(n, ty)| n == &var_name && ty == "Ecs") {
+                for (m, snip, det) in [
+                    ("spawn", "spawn()", "fn spawn() -> int"),
+                    ("set", "set(${1:ent}, ${2:Comp { ... }})", "fn set(ent: int, comp: T)"),
+                    ("remove_entity", "remove_entity(${1:ent})", "fn remove_entity(ent: int) (cascade)"),
+                    ("set_parent", "set_parent(${1:child}, ${2:parent})", "fn set_parent(child: int, parent: int)"),
+                    ("detach", "detach(${1:child})", "fn detach(child: int)"),
+                    ("parent_of", "parent_of(${1:child})", "fn parent_of(child: int) -> int"),
+                    ("has", "has(${1:ent}, ${2:Comp})", "fn has(ent: int, Comp) -> int"),
+                    ("remove_comp", "remove_comp(${1:ent}, ${2:Comp})", "fn remove_comp(ent: int, Comp) -> int"),
+                ] {
+                    items.push(CompletionItem {
+                        label: m.to_string(),
+                        kind: Some(CompletionItemKind::METHOD),
+                        insert_text: Some(snip.to_string()),
+                        insert_text_format: Some(InsertTextFormat::SNIPPET),
+                        detail: Some(det.to_string()),
+                        sort_text: Some(format!("0_{}", m)),
                         ..Default::default()
                     });
                 }

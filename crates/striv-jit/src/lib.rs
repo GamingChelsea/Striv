@@ -182,6 +182,8 @@ struct CompileEnv<'a> {
     check_gas_ref: cranelift::codegen::ir::FuncRef,
     ecs_set_ref: cranelift::codegen::ir::FuncRef,
     ecs_query_run_ref: cranelift::codegen::ir::FuncRef,
+    ecs_has_ref: cranelift::codegen::ir::FuncRef,
+    ecs_remove_comp_ref: cranelift::codegen::ir::FuncRef,
     to_json_ref: cranelift::codegen::ir::FuncRef,
     from_json_ref: cranelift::codegen::ir::FuncRef,
     json_schemas: &'a HashMap<String, (usize, usize)>,
@@ -312,6 +314,11 @@ impl JitCompiler {
         builder.symbol(
             "striv_ecs_query_run",
             lang_runtime::striv_ecs_query_run as *const u8,
+        );
+        builder.symbol("striv_ecs_has", lang_runtime::striv_ecs_has as *const u8);
+        builder.symbol(
+            "striv_ecs_remove_comp",
+            lang_runtime::striv_ecs_remove_comp as *const u8,
         );
         builder.symbol(
             "striv_struct_to_json",
@@ -763,13 +770,26 @@ impl JitCompiler {
             .module
             .declare_function("striv_ecs_set", Linkage::Import, &sig_5i_i)
             .unwrap();
-        let mut sig_7i_v = self.module.make_signature();
-        for _ in 0..7 {
-            sig_7i_v.params.push(AbiParam::new(int_ty));
+        let mut sig_10i_v = self.module.make_signature();
+        for _ in 0..10 {
+            sig_10i_v.params.push(AbiParam::new(int_ty));
         }
         let ecs_query_run_id = self
             .module
-            .declare_function("striv_ecs_query_run", Linkage::Import, &sig_7i_v)
+            .declare_function("striv_ecs_query_run", Linkage::Import, &sig_10i_v)
+            .unwrap();
+        let mut sig_3i_i = self.module.make_signature();
+        for _ in 0..3 {
+            sig_3i_i.params.push(AbiParam::new(int_ty));
+        }
+        sig_3i_i.returns.push(AbiParam::new(int_ty));
+        let ecs_has_id = self
+            .module
+            .declare_function("striv_ecs_has", Linkage::Import, &sig_3i_i)
+            .unwrap();
+        let ecs_remove_comp_id = self
+            .module
+            .declare_function("striv_ecs_remove_comp", Linkage::Import, &sig_3i_i)
             .unwrap();
         let to_json_id = self
             .module
@@ -1177,6 +1197,10 @@ impl JitCompiler {
                     ecs_query_run_ref: self
                         .module
                         .declare_func_in_func(ecs_query_run_id, builder.func),
+                    ecs_has_ref: self.module.declare_func_in_func(ecs_has_id, builder.func),
+                    ecs_remove_comp_ref: self
+                        .module
+                        .declare_func_in_func(ecs_remove_comp_id, builder.func),
                     to_json_ref: self.module.declare_func_in_func(to_json_id, builder.func),
                     from_json_ref: self.module.declare_func_in_func(from_json_id, builder.func),
                     json_schemas: &json_schemas,
@@ -1804,6 +1828,33 @@ fn compile_method_call(
     vars: &HashMap<String, VarInfo>,
     env: &mut CompileEnv,
 ) -> Value {
+    if (method == "has" || method == "remove_comp") && args.len() == 2 {
+        let ecs_var_opt = match vars.get(receiver) {
+            Some(VarInfo::Handle {
+                var, type_name, ..
+            }) if type_name == "Ecs" => Some(*var),
+            Some(VarInfo::Int { var, .. }) => Some(*var),
+            _ => None,
+        };
+        if let Some(ecs_var) = ecs_var_opt {
+            let ecs_ptr = builder.use_var(ecs_var);
+            let ent_val = compile_expr(&args[0], builder, vars, env);
+            let comp_name = match &args[1] {
+                Expr::Var(t) => t.as_str(),
+                _ => panic!("ecs.{}() expects component type name as 2nd argument", method),
+            };
+            let tid = builder
+                .ins()
+                .iconst(env.int_ty, striv_syntax::fnv1a_64(comp_name));
+            let func_ref = if method == "has" {
+                env.ecs_has_ref
+            } else {
+                env.ecs_remove_comp_ref
+            };
+            let c = builder.ins().call(func_ref, &[ecs_ptr, ent_val, tid]);
+            return builder.inst_results(c)[0];
+        }
+    }
     if method == "is_valid" {
         let val = match vars.get(receiver) {
             Some(VarInfo::Int { var, .. })
@@ -3235,7 +3286,9 @@ fn compile_stmt_with_rest(
             true
         }
         Stmt::Query {
+            entity_var,
             terms,
+            without,
             ecs_var,
             is_parallel,
             ..
@@ -3290,6 +3343,20 @@ fn compile_stmt_with_rest(
                     .stack_store(env.int_ty, v_i64, cap_slot, (i * 8) as i32);
             }
 
+            let excl_slot = builder.create_sized_stack_slot(StackSlotData::new(
+                StackSlotKind::ExplicitSlot,
+                (without.len().max(1) * 8) as u32,
+                3,
+            ));
+            for (i, ex_name) in without.iter().enumerate() {
+                let tid = builder
+                    .ins()
+                    .iconst(env.int_ty, striv_syntax::fnv1a_64(ex_name));
+                builder
+                    .ins()
+                    .stack_store(env.int_ty, tid, excl_slot, (i * 8) as i32);
+            }
+
             let tids_addr = builder.ins().stack_addr(env.int_ty, tids_slot, 0);
             let comp_count = builder.ins().iconst(env.int_ty, terms.len() as i64);
             let fn_addr = builder.ins().func_addr(env.int_ty, helper_ref);
@@ -3298,6 +3365,11 @@ fn compile_stmt_with_rest(
             let par_flag = builder
                 .ins()
                 .iconst(env.int_ty, if *is_parallel { 1 } else { 0 });
+            let excl_addr = builder.ins().stack_addr(env.int_ty, excl_slot, 0);
+            let excl_count = builder.ins().iconst(env.int_ty, without.len() as i64);
+            let pass_ent_id = builder
+                .ins()
+                .iconst(env.int_ty, if entity_var.is_some() { 1 } else { 0 });
             builder.ins().call(
                 env.ecs_query_run_ref,
                 &[
@@ -3308,6 +3380,9 @@ fn compile_stmt_with_rest(
                     caps_addr,
                     cap_count,
                     par_flag,
+                    excl_addr,
+                    excl_count,
+                    pass_ent_id,
                 ],
             );
             false
@@ -4494,18 +4569,24 @@ fn collect_parallel_in_stmts(
                 );
             }
             Stmt::Query {
+                entity_var,
                 terms,
                 ecs_var,
                 body,
                 ..
             } => {
                 let mut bound = std::collections::HashSet::new();
+                let mut params: Vec<(String, String, bool)> = Vec::new();
+                if let Some(id_name) = entity_var {
+                    bound.insert(id_name.clone());
+                    params.push((id_name.clone(), "int".to_string(), false));
+                }
                 for (v, _, _) in terms {
                     bound.insert(v.clone());
                 }
                 let mut free = Vec::new();
                 collect_free_vars_in_stmts(body, &bound, &mut free);
-                let mut params: Vec<(String, String, bool)> = terms.clone();
+                params.extend(terms.clone());
                 let mut cap_names = Vec::new();
                 for cap in free {
                     let (cap_ty, _) = local_types
@@ -4651,12 +4732,20 @@ fn collect_free_vars_in_expr(
             collect_free_vars_in_expr(left, bound, out);
             collect_free_vars_in_expr(right, bound, out);
         }
-        Expr::MethodCall { receiver, args, .. } => {
+        Expr::MethodCall {
+            receiver,
+            method,
+            args,
+        } => {
             if !bound.contains(receiver) && !out.contains(receiver) {
                 out.push(receiver.clone());
             }
-            for a in args {
-                collect_free_vars_in_expr(a, bound, out);
+            if (method == "has" || method == "remove_comp") && args.len() == 2 {
+                collect_free_vars_in_expr(&args[0], bound, out);
+            } else {
+                for a in args {
+                    collect_free_vars_in_expr(a, bound, out);
+                }
             }
         }
         Expr::Call { args, .. } => {
@@ -5202,5 +5291,53 @@ main :: proc() -> int {
         let ptr = jit.compile_program(&prog);
         let f: fn() -> i64 = unsafe { std::mem::transmute(ptr) };
         assert_eq!(f(), 8);
+    }
+
+    #[test]
+    fn test_space_ecs_2_0_ksp_staging() {
+        let odin_src = r#"
+Orbit  :: struct { alt: float = 0.0 }
+Fuel   :: struct { kg: float = 100.0 }
+Docked :: struct { bay: int = 1 }
+
+main :: proc() -> int {
+    ecs := Ecs::new()
+
+    pod := ecs.spawn()
+    booster := ecs.spawn()
+    nozzle := ecs.spawn()
+    ecs.set_parent(booster, pod)
+    ecs.set_parent(nozzle, booster)
+    assert(ecs.parent_of(nozzle) == booster)
+
+    ecs.set(pod, Orbit { alt: 100.0 })
+    ecs.set(booster, Orbit { alt: 100.0 })
+    ecs.set(booster, Fuel { kg: 0.0 })
+
+    parked := ecs.spawn()
+    ecs.set(parked, Orbit { alt: 0.0 })
+    ecs.set(parked, Docked { bay: 1 })
+
+    query (id: entity, mut orb: Orbit, !Docked) in ecs {
+        orb.alt += 50.0
+        if ecs.has(id, Fuel) == 1 {
+            ecs.detach(id)
+        }
+    }
+
+    assert(ecs.parent_of(booster) == 0)
+    assert(ecs.has(parked, Docked) == 1)
+
+    ecs.remove_entity(booster)
+    assert(ecs.parent_of(nozzle) == 0)
+    return 1
+}
+"#;
+        let prog = striv_syntax::Parser::new_with_dialect(odin_src, striv_syntax::Dialect::Odin)
+            .parse_program();
+        let mut jit = JitCompiler::new();
+        let ptr = jit.compile_program(&prog);
+        let f: fn() -> i64 = unsafe { std::mem::transmute(ptr) };
+        assert_eq!(f(), 1);
     }
 }

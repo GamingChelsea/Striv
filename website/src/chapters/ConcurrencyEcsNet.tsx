@@ -191,6 +191,62 @@ step :: proc(dt: float) {
     }
 }`}
       />
+
+      <DocH2 id="ecs-2-0" theme={theme}>
+        {tr(lang, 'Space-ECS 2.0: Entity IDs, Hierarchies & !Without', 'Space-ECS 2.0: Entity-IDs, Hierarchien & !Without')}
+      </DocH2>
+      <DocP theme={theme}>
+        {tr(
+          lang,
+          'Bind entity IDs directly in queries via id: entity, exclude components with !Tag, inspect or strip single components with ecs.has(id, Comp) / ecs.remove_comp(id, Comp), and build parent-child hierarchies with set_parent, detach, parent_of, and automatic cascade delete in remove_entity.',
+          'Binde Entity-IDs direkt in Queries per id: entity, schließe Komponenten per !Tag aus, prüfe oder entferne Einzel-Komponenten mit ecs.has(id, Comp) / ecs.remove_comp(id, Comp) und baue Hierarchien mit set_parent, detach, parent_of sowie automatischem Kaskaden-Delete in remove_entity.',
+        )}
+      </DocP>
+      <CodeBlock
+        dialect={dialect}
+        theme={theme}
+        filename="ecs_staging.strv"
+        code={`struct Orbit { alt: float = 0.0 }
+struct Fuel { kg: float = 100.0 }
+struct Docked { bay: int = 1 }
+
+fn stage_step() {
+    let mut ecs = Ecs::new()
+    let pod = ecs.spawn()
+    let booster = ecs.spawn()
+    ecs.set_parent(booster, pod)
+    ecs.set(booster, Orbit { alt: 100.0 })
+    ecs.set(booster, Fuel { kg: 0.0 })
+
+    query (id: entity, mut orb: Orbit, !Docked) in ecs {
+        orb.alt += 50.0
+        if ecs.has(id, Fuel) == 1 {
+            ecs.detach(id)
+        }
+    }
+    ecs.remove_entity(booster) // cascades to children
+}`}
+        odinCode={`Orbit  :: struct { alt: float = 0.0 }
+Fuel   :: struct { kg: float = 100.0 }
+Docked :: struct { bay: int = 1 }
+
+stage_step :: proc() {
+    ecs := Ecs::new()
+    pod := ecs.spawn()
+    booster := ecs.spawn()
+    ecs.set_parent(booster, pod)
+    ecs.set(booster, Orbit { alt: 100.0 })
+    ecs.set(booster, Fuel { kg: 0.0 })
+
+    query (id: entity, mut orb: Orbit, !Docked) in ecs {
+        orb.alt += 50.0
+        if ecs.has(id, Fuel) == 1 {
+            ecs.detach(id)
+        }
+    }
+    ecs.remove_entity(booster) // löscht Kinder per Kaskade mit
+}`}
+      />
     </div>
   )
 }

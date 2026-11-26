@@ -40,6 +40,7 @@ impl ComponentPool {
 pub struct StrivEcs {
     next_entity: i64,
     pools: HashMap<i64, ComponentPool>,
+    pub parents: HashMap<i64, i64>,
 }
 
 #[unsafe(no_mangle)]
@@ -47,7 +48,60 @@ pub extern "C" fn striv_ecs_new() -> *mut StrivEcs {
     Box::into_raw(Box::new(StrivEcs {
         next_entity: 1,
         pools: HashMap::new(),
+        parents: HashMap::new(),
     }))
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_ecs_set_parent(ecs: *mut StrivEcs, child: i64, parent: i64) -> i64 {
+    let w = unsafe { &mut *ecs };
+    if child != parent && parent > 0 {
+        w.parents.insert(child, parent);
+    }
+    0
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_ecs_detach(ecs: *mut StrivEcs, child: i64) -> i64 {
+    let w = unsafe { &mut *ecs };
+    w.parents.remove(&child);
+    0
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_ecs_parent_of(ecs: *const StrivEcs, child: i64) -> i64 {
+    let w = unsafe { &*ecs };
+    w.parents.get(&child).copied().unwrap_or(0)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_ecs_has(ecs: *const StrivEcs, entity: i64, type_id: i64) -> i64 {
+    let w = unsafe { &*ecs };
+    w.pools
+        .get(&type_id)
+        .is_some_and(|p| p.index_of.contains_key(&entity)) as i64
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_ecs_remove_comp(ecs: *mut StrivEcs, entity: i64, type_id: i64) -> i64 {
+    let w = unsafe { &mut *ecs };
+    if let Some(pool) = w.pools.get_mut(&type_id) {
+        if let Some(idx) = pool.index_of.remove(&entity) {
+            let last_idx = pool.entities.len() - 1;
+            let sz = pool.elem_size;
+            if idx != last_idx {
+                let moved_ent = pool.entities[last_idx];
+                pool.entities[idx] = moved_ent;
+                pool.data
+                    .copy_within(last_idx * sz..(last_idx + 1) * sz, idx * sz);
+                pool.index_of.insert(moved_ent, idx);
+            }
+            pool.entities.pop();
+            pool.data.truncate(last_idx * sz);
+            return 1;
+        }
+    }
+    0
 }
 
 #[unsafe(no_mangle)]
@@ -86,21 +140,36 @@ pub extern "C" fn striv_ecs_get_ptr(ecs: *mut StrivEcs, entity: i64, type_id: i6
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn striv_ecs_remove_entity(ecs: *mut StrivEcs, entity: i64) -> i64 {
+pub extern "C" fn striv_ecs_remove_entity(ecs: *mut StrivEcs, root_entity: i64) -> i64 {
     let w = unsafe { &mut *ecs };
-    for pool in w.pools.values_mut() {
-        if let Some(idx) = pool.index_of.remove(&entity) {
-            let last_idx = pool.entities.len() - 1;
-            let sz = pool.elem_size;
-            if idx != last_idx {
-                let moved_ent = pool.entities[last_idx];
-                pool.entities[idx] = moved_ent;
-                pool.data
-                    .copy_within(last_idx * sz..(last_idx + 1) * sz, idx * sz);
-                pool.index_of.insert(moved_ent, idx);
+    let mut to_delete = vec![root_entity];
+    let mut i = 0;
+    while i < to_delete.len() {
+        let current = to_delete[i];
+        for (&child, &parent) in &w.parents {
+            if parent == current && !to_delete.contains(&child) {
+                to_delete.push(child);
             }
-            pool.entities.pop();
-            pool.data.truncate(last_idx * sz);
+        }
+        i += 1;
+    }
+
+    for ent in to_delete {
+        w.parents.remove(&ent);
+        for pool in w.pools.values_mut() {
+            if let Some(idx) = pool.index_of.remove(&ent) {
+                let last_idx = pool.entities.len() - 1;
+                let sz = pool.elem_size;
+                if idx != last_idx {
+                    let moved_ent = pool.entities[last_idx];
+                    pool.entities[idx] = moved_ent;
+                    pool.data
+                        .copy_within(last_idx * sz..(last_idx + 1) * sz, idx * sz);
+                    pool.index_of.insert(moved_ent, idx);
+                }
+                pool.entities.pop();
+                pool.data.truncate(last_idx * sz);
+            }
         }
     }
     0
@@ -115,6 +184,9 @@ pub extern "C" fn striv_ecs_query_run(
     caps_ptr: *const i64,
     cap_count: i64,
     is_parallel: i64,
+    exclude_tids_ptr: *const i64,
+    exclude_count: i64,
+    pass_entity_id: i64,
 ) {
     let w = unsafe { &mut *ecs };
     let n_comps = comp_count as usize;
@@ -124,6 +196,11 @@ pub extern "C" fn striv_ecs_query_run(
     let tids = unsafe { std::slice::from_raw_parts(type_ids_ptr, n_comps) };
     let caps = if cap_count > 0 {
         unsafe { std::slice::from_raw_parts(caps_ptr, cap_count as usize) }
+    } else {
+        &[]
+    };
+    let excl = if exclude_count > 0 {
+        unsafe { std::slice::from_raw_parts(exclude_tids_ptr, exclude_count as usize) }
     } else {
         &[]
     };
@@ -143,10 +220,19 @@ pub extern "C" fn striv_ecs_query_run(
 
     let candidate_entities = w.pools[&driver_tid].entities.clone();
 
+    let stride = n_comps + if pass_entity_id != 0 { 1 } else { 0 };
     // Flacher Pointer-Puffer (1 Allokation statt 1 Vec pro Entity!)
-    let mut matched_ptrs: Vec<usize> = Vec::with_capacity(candidate_entities.len() * n_comps);
+    let mut matched_ptrs: Vec<usize> = Vec::with_capacity(candidate_entities.len() * stride);
     'ent_loop: for ent in candidate_entities {
+        for &ex_tid in excl {
+            if w.pools.get(&ex_tid).is_some_and(|p| p.index_of.contains_key(&ent)) {
+                continue 'ent_loop;
+            }
+        }
         let start = matched_ptrs.len();
+        if pass_entity_id != 0 {
+            matched_ptrs.push(ent as usize);
+        }
         for &tid in tids {
             if let Some(ptr) = w.pools.get_mut(&tid).and_then(|p| p.get_ptr(ent)) {
                 matched_ptrs.push(ptr as usize);
@@ -158,11 +244,11 @@ pub extern "C" fn striv_ecs_query_run(
     }
 
     if is_parallel != 0 {
-        matched_ptrs.par_chunks_exact(n_comps).for_each(|row| unsafe {
+        matched_ptrs.par_chunks_exact(stride).for_each(|row| unsafe {
             invoke_query_fn(body_fn_addr, row, caps);
         });
     } else {
-        for row in matched_ptrs.chunks_exact(n_comps) {
+        for row in matched_ptrs.chunks_exact(stride) {
             unsafe {
                 invoke_query_fn(body_fn_addr, row, caps);
             }

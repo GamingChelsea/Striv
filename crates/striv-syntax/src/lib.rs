@@ -199,7 +199,9 @@ pub enum Stmt {
     Break,
     Continue,
     Query {
+        entity_var: Option<String>,
         terms: Vec<(String, String, bool)>,
+        without: Vec<String>,
         ecs_var: String,
         is_parallel: bool,
         body: Vec<Stmt>,
@@ -1019,20 +1021,32 @@ impl Parser {
     fn parse_query_stmt(&mut self, is_parallel: bool) -> Stmt {
         self.expect(Token::Query);
         self.expect(Token::LParen);
+        let mut entity_var = None;
         let mut terms = Vec::new();
+        let mut without = Vec::new();
         while self.peek() != Some(&Token::RParen) {
-            let is_mut = if self.peek() == Some(&Token::Mut) {
+            if self.peek() == Some(&Token::Bang) {
                 self.next();
-                true
+                let excluded_ty = self.parse_type_name();
+                without.push(excluded_ty);
             } else {
-                false
-            };
-            let Some(Token::Ident(v_name)) = self.next() else {
-                self.error("Expected variable name in `query`");
-            };
-            self.expect(Token::Colon);
-            let ty = self.parse_type_name();
-            terms.push((v_name, ty, is_mut));
+                let is_mut = if self.peek() == Some(&Token::Mut) {
+                    self.next();
+                    true
+                } else {
+                    false
+                };
+                let Some(Token::Ident(v_name)) = self.next() else {
+                    self.error("Expected variable name in `query`");
+                };
+                self.expect(Token::Colon);
+                let ty = self.parse_type_name();
+                if ty == "entity" {
+                    entity_var = Some(v_name);
+                } else {
+                    terms.push((v_name, ty, is_mut));
+                }
+            }
             if self.peek() == Some(&Token::Comma) {
                 self.next();
             }
@@ -1044,7 +1058,9 @@ impl Parser {
         };
         let body = self.parse_block();
         Stmt::Query {
+            entity_var,
             terms,
+            without,
             ecs_var,
             is_parallel,
             body,
