@@ -213,18 +213,29 @@ fn main() {
                 let _ = main_fn();
             };
 
+            let watch_path = path.clone();
+            std::thread::spawn(move || {
+                let mut last_mod = fs::metadata(&watch_path).and_then(|m| m.modified()).ok();
+                loop {
+                    std::thread::sleep(std::time::Duration::from_millis(120));
+                    let now_mod = fs::metadata(&watch_path).and_then(|m| m.modified()).ok();
+                    if now_mod != last_mod {
+                        last_mod = now_mod;
+                        std::thread::sleep(std::time::Duration::from_millis(25));
+                        lang_runtime::request_dev_reload();
+                    }
+                }
+            });
+
             println!(
-                "[Striv] Dev-Watcher running! Edit '{}' and press Ctrl+S to re-run (Ctrl+C to stop).",
+                "[Striv] Dev-Watcher running! Edit '{}' and press Ctrl+S to hot-reload (Ctrl+C to stop).",
                 path
             );
-            run_once(path);
             loop {
-                std::thread::sleep(std::time::Duration::from_millis(120));
-                let now_mod = fs::metadata(path).and_then(|m| m.modified()).ok();
-                if now_mod != last_modified {
-                    last_modified = now_mod;
-                    std::thread::sleep(std::time::Duration::from_millis(20));
-                    run_once(path);
+                lang_runtime::take_dev_reload();
+                run_once(path);
+                while !lang_runtime::take_dev_reload() {
+                    std::thread::sleep(std::time::Duration::from_millis(80));
                 }
             }
         }

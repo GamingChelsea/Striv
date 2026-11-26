@@ -75,6 +75,165 @@ fn offset_to_position(src: &str, offset: usize) -> Position {
     Position::new(line, col)
 }
 
+fn split_code_and_comment(line: &str) -> (&str, Option<&str>) {
+    let bytes = line.as_bytes();
+    let mut in_str = false;
+    let mut escaped = false;
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if in_str {
+            if escaped {
+                escaped = false;
+            } else if b == b'\\' {
+                escaped = true;
+            } else if b == b'"' {
+                in_str = false;
+            }
+        } else if b == b'"' {
+            in_str = true;
+        } else if b == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'/' {
+            return (&line[..i], Some(&line[i..]));
+        }
+        i += 1;
+    }
+    (line, None)
+}
+
+fn format_code_part(code: &str) -> String {
+    let mut out = String::with_capacity(code.len() + 8);
+    let chars: Vec<char> = code.chars().collect();
+    let mut in_str = false;
+    let mut escaped = false;
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if in_str {
+            out.push(c);
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == '"' {
+                in_str = false;
+            }
+            i += 1;
+            continue;
+        }
+        if c == '"' {
+            in_str = true;
+            out.push(c);
+            i += 1;
+            continue;
+        }
+        if c == ',' {
+            out.push(',');
+            if i + 1 < chars.len() && !chars[i + 1].is_whitespace() && chars[i + 1] != ')' && chars[i + 1] != ']' {
+                out.push(' ');
+            }
+            i += 1;
+            continue;
+        }
+        if c == '{' {
+            if let Some(prev) = out.chars().last() {
+                if !prev.is_whitespace() && prev != '(' && prev != '[' && prev != '{' {
+                    out.push(' ');
+                }
+            }
+            out.push('{');
+            i += 1;
+            continue;
+        }
+        out.push(c);
+        i += 1;
+    }
+    out.trim().to_string()
+}
+
+fn format_comment(comment: &str) -> String {
+    if let Some(rest) = comment.strip_prefix("///") {
+        if rest.is_empty() || rest.starts_with(' ') {
+            comment.trim_end().to_string()
+        } else {
+            format!("/// {}", rest.trim())
+        }
+    } else if let Some(rest) = comment.strip_prefix("//") {
+        if rest.is_empty() || rest.starts_with(' ') {
+            comment.trim_end().to_string()
+        } else {
+            format!("// {}", rest.trim())
+        }
+    } else {
+        comment.trim_end().to_string()
+    }
+}
+
+fn count_braces_outside_strings(code: &str) -> (usize, usize) {
+    let mut opens = 0usize;
+    let mut closes = 0usize;
+    let mut in_str = false;
+    let mut escaped = false;
+    for c in code.chars() {
+        if in_str {
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == '"' {
+                in_str = false;
+            }
+        } else if c == '"' {
+            in_str = true;
+        } else if c == '{' {
+            opens += 1;
+        } else if c == '}' {
+            closes += 1;
+        }
+    }
+    (opens, closes)
+}
+
+fn format_preserving_blank_lines(src: &str) -> String {
+    let mut out = Vec::new();
+    let mut blank_run = 0usize;
+    let mut indent: usize = 0;
+
+    for raw_line in src.lines() {
+        let trimmed = raw_line.trim();
+        if trimmed.is_empty() {
+            blank_run += 1;
+            if blank_run <= 1 {
+                out.push(String::new());
+            }
+            continue;
+        }
+        blank_run = 0;
+
+        let (raw_code, raw_comment) = split_code_and_comment(trimmed);
+        let code = format_code_part(raw_code);
+        let comment = raw_comment.map(format_comment);
+
+        let leading_closes = code.chars().take_while(|&c| c == '}').count();
+        let line_indent = indent.saturating_sub(leading_closes);
+        let formatted_line = match (code.is_empty(), comment) {
+            (true, Some(c)) => format!("{}{}", "    ".repeat(line_indent), c),
+            (false, Some(c)) => format!("{}{} {}", "    ".repeat(line_indent), code, c),
+            (false, None) => format!("{}{}", "    ".repeat(line_indent), code),
+            (true, None) => String::new(),
+        };
+        out.push(formatted_line);
+
+        let (opens, closes) = count_braces_outside_strings(&code);
+        indent = (indent + opens).saturating_sub(closes);
+    }
+
+    let mut res = out.join("\n");
+    if src.ends_with('\n') && !res.ends_with('\n') {
+        res.push('\n');
+    }
+    res
+}
+
 #[tower_lsp::async_trait]
 impl LanguageServer for StrivLsp {
     async fn initialize(&self, _: InitializeParams) -> Result<InitializeResult> {
@@ -148,8 +307,8 @@ impl LanguageServer for StrivLsp {
         let parsed = catch_unwind(AssertUnwindSafe(|| {
             Parser::new_with_dialect(src, dialect).parse_program()
         }));
-        if let Ok(prog) = parsed {
-            let formatted = striv_syntax::format_program_with_options(&prog, dialect, braces);
+        if parsed.is_ok() {
+            let formatted = format_preserving_blank_lines(src);
             let edit = TextEdit {
                 range: Range::new(Position::new(0, 0), Position::new(u32::MAX, 0)),
                 new_text: formatted,
@@ -289,6 +448,17 @@ impl LanguageServer for StrivLsp {
                 .rev()
                 .collect();
             let prefix = format!("{}__", ty_name);
+            if ty_name == "Window" {
+                items.push(CompletionItem {
+                    label: "new".to_string(),
+                    kind: Some(CompletionItemKind::FUNCTION),
+                    insert_text: Some("new(\"${1:Title}\", ${2:1280}, ${3:720})".to_string()),
+                    insert_text_format: Some(InsertTextFormat::SNIPPET),
+                    detail: Some("fn Window::new(title: String, width: int, height: int) -> Window".to_string()),
+                    sort_text: Some("0_new".to_string()),
+                    ..Default::default()
+                });
+            }
             for (k, _) in lang_runtime::generated_bridge::exported_constants() {
                 if let Some(member) = k.strip_prefix(&prefix) {
                     items.push(CompletionItem {
@@ -299,8 +469,19 @@ impl LanguageServer for StrivLsp {
                     });
                 }
             }
-            for (s_name, _, _, _) in lang_runtime::generated_bridge::exported_symbols() {
-                if let Some(member) = s_name.strip_prefix(&prefix) {
+            let crate_needle = format!("_{}_", ty_name.to_lowercase());
+            for (s_name, c_sym, _, _) in lang_runtime::generated_bridge::exported_symbols() {
+                if ty_name == "Window" && *s_name == "Window__new" {
+                    continue;
+                }
+                let matched_member = s_name.strip_prefix(&prefix).or_else(|| {
+                    if c_sym.to_lowercase().contains(&crate_needle) {
+                        Some(*s_name)
+                    } else {
+                        None
+                    }
+                });
+                if let Some(member) = matched_member {
                     let doc_entry = lang_runtime::generated_bridge::exported_docs()
                         .iter()
                         .find(|(n, _, _)| n == s_name);

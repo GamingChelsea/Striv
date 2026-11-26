@@ -533,7 +533,7 @@ pub enum Token {
         lex.slice().replace('_', "").parse::<f64>().ok()
     }, priority = 4)]
     Float(f64),
-    #[regex("0x[0-9a-fA-F]+", |lex| i64::from_str_radix(&lex.slice()[2..], 16).ok())]
+    #[regex(r"0x[0-9a-zA-Z_]+", |lex| i64::from_str_radix(&lex.slice()[2..].replace('_', ""), 16).ok(), priority = 6)]
     Hex(i64),
     #[regex(r"[0-9][0-9_]*", |lex| lex.slice().replace('_', "").parse::<i64>().ok(), priority = 3)]
     Int(i64),
@@ -2137,13 +2137,16 @@ pub fn check_diagnostics(src: &str) -> Vec<ParseError> {
 pub fn check_diagnostics_with_dialect(src: &str, dialect: Dialect) -> Vec<ParseError> {
     let mut errors = Vec::new();
 
-    // 1. Check lexer errors (unknown characters like `@` or `$`)
+    // 1. Check lexer errors (unknown characters or invalid hex literals like `0x0B0E1ssssss`)
     for (res, span) in Token::lexer(src).spanned() {
         if res.is_err() {
-            errors.push(ParseError {
-                message: format!("Unknown character: `{}`", &src[span.clone()]),
-                span,
-            });
+            let slice = &src[span.clone()];
+            let msg = if slice.starts_with("0x") {
+                format!("Invalid hex literal: `{}`", slice)
+            } else {
+                format!("Unknown token: `{}`", slice)
+            };
+            errors.push(ParseError { message: msg, span });
         }
     }
     if !errors.is_empty() {
@@ -2995,5 +2998,12 @@ fn step(mut ecs: Ecs) {
         assert!(formatted.contains("unit Force = kg * Accel\n"));
         assert!(formatted.contains("rust { pub struct Foo { pub x: i64 } }"));
         assert!(formatted.contains("query (id: entity, mut orb: Orbit, !Docked) in ecs {"));
+    }
+
+    #[test]
+    fn test_invalid_hex_literal_detected() {
+        let errs = check_diagnostics("fn main() { let x = 0x0B0E1ssssss }");
+        assert!(!errs.is_empty(), "Expected invalid hex literal error");
+        assert!(errs[0].message.contains("Invalid hex literal"));
     }
 }

@@ -1,4 +1,4 @@
-# Striv 1.2
+# Striv 1.3
 
 > **Language / Sprache:** [Deutsch](README.md) | English
 > **Transparency Note:** This entire project (compiler, Cranelift JIT, runtime, bindgen, LSP, CLI, and documentation website) was completely **vibe-coded** — developed iteratively with AI assistance and verified directly against real test suites.

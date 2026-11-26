@@ -617,8 +617,22 @@ pub fn create_host_window(title: &str, width: usize, height: usize) -> i64 {
     WINDOWS.with(|w| w.borrow_mut().insert(host_win).data().as_ffi() as i64)
 }
 
-/// Updates the window at ~60 FPS; returns `false` when the user presses ESC or closes it.
+pub static DEV_RELOAD_REQUESTED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+pub fn request_dev_reload() {
+    DEV_RELOAD_REQUESTED.store(true, Ordering::Relaxed);
+}
+
+pub fn take_dev_reload() -> bool {
+    DEV_RELOAD_REQUESTED.swap(false, Ordering::Relaxed)
+}
+
+/// Updates the window at ~60 FPS; returns `false` when the user presses ESC, closes it, or dev reload is requested.
 pub fn present_host_window(handle_bits: i64) -> bool {
+    if DEV_RELOAD_REQUESTED.load(Ordering::Relaxed) {
+        return false;
+    }
     let handle = WinHandle::from(KeyData::from_ffi(handle_bits as u64));
     WINDOWS.with(|w| {
         let mut map = w.borrow_mut();
@@ -646,6 +660,13 @@ pub extern "C" fn striv_window_new(title_ptr: *const String, width: i64, height:
 
 #[unsafe(no_mangle)]
 pub extern "C" fn striv_window_is_open(handle_bits: i64) -> i64 {
+    if DEV_RELOAD_REQUESTED.load(Ordering::Relaxed) {
+        let handle = WinHandle::from(KeyData::from_ffi(handle_bits as u64));
+        WINDOWS.with(|w| {
+            w.borrow_mut().remove(handle);
+        });
+        return 0;
+    }
     let handle = WinHandle::from(KeyData::from_ffi(handle_bits as u64));
     WINDOWS.with(|w| {
         let map = w.borrow();
