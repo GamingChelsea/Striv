@@ -5,7 +5,7 @@ import { ChapterProps, DocH1, DocH2, DocH3, DocP, DocTable } from './DocPrimitiv
 export function OverviewChapter({ dialect, theme, lang }: ChapterProps) {
   return (
     <div className="space-y-6">
-      <DocH1>{tr(lang, 'Striv 1.3 — Language Documentation', 'Striv 1.3 — Sprachdokumentation')}</DocH1>
+      <DocH1>{tr(lang, 'Striv 1.4 — Language Documentation', 'Striv 1.4 — Sprachdokumentation')}</DocH1>
       <DocP theme={theme}>
         {tr(
           lang,
@@ -306,8 +306,8 @@ tick_allman :: proc(dt: float)
       <DocP theme={theme}>
         {tr(
           lang,
-          'Prebuilt binaries and editor extensions are published in GitHub Release v1.3.0 (striv.exe, striv-vscode-ext.zip, striv-zed-ext.zip). Place striv.exe on your system PATH so editors can launch striv lsp.',
-          'Fertige Binaries und Editor-Extensions liegen im GitHub Release v1.3.0 (striv.exe, striv-vscode-ext.zip, striv-zed-ext.zip). Lege striv.exe in deinen System-PATH, damit Editoren striv lsp starten können.',
+          'Prebuilt binaries and editor extensions are published in GitHub Release v1.4.0 (striv.exe, striv-vscode-ext.zip, striv-zed-ext.zip). Place striv.exe on your system PATH so editors can launch striv lsp.',
+          'Fertige Binaries und Editor-Extensions liegen im GitHub Release v1.4.0 (striv.exe, striv-vscode-ext.zip, striv-zed-ext.zip). Lege striv.exe in deinen System-PATH, damit Editoren striv lsp starten können.',
         )}
       </DocP>
       <DocTable

@@ -271,10 +271,10 @@ copy := buf // Auto-Clone oder 0-ns-Move`,
     id: 'mod-ecs',
     name: 'Ecs',
     category: 'module',
-    signature: 'Ecs::new(), spawn(), set(), set_parent(), detach(), parent_of(), has(), remove_comp(), remove_entity()',
+    signature: 'Ecs::new(), spawn(), set(), set_parent(), detach(), parent_of(), has(), remove_comp(), set_group(), group_of(), in_same_group(), is_changed(), clear_changed(), remove_entity()',
     summary: {
-      en: 'Cache-friendly Sparse-Set ECS with parent-child hierarchies, cascade delete on remove_entity, and single-component checks.',
-      de: 'Cache-freundliches Sparse-Set-ECS mit Eltern-Kind-Hierarchien, Kaskaden-Delete in remove_entity und Einzel-Komponenten-Checks.',
+      en: 'Cache-friendly Sparse-Set ECS (3.0) with parent-child hierarchies, cascade delete on remove_entity, entity groups (e.g. subspaces/bubbles), and per-component change detection (is_changed / clear_changed).',
+      de: 'Cache-freundliches Sparse-Set-ECS (3.0) mit Eltern-Kind-Hierarchien, Kaskaden-Delete in remove_entity, Entity-Gruppen (z. B. Subspaces/Bubbles) und Komponenten-Change-Detection (is_changed / clear_changed).',
     },
     rustCode: `let mut ecs = Ecs::new()
 let e = ecs.spawn()

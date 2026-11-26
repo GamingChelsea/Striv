@@ -617,6 +617,11 @@ impl LanguageServer for StrivLsp {
                     ("parent_of", "parent_of(${1:child})", "fn parent_of(child: int) -> int"),
                     ("has", "has(${1:ent}, ${2:Comp})", "fn has(ent: int, Comp) -> int"),
                     ("remove_comp", "remove_comp(${1:ent}, ${2:Comp})", "fn remove_comp(ent: int, Comp) -> int"),
+                    ("is_changed", "is_changed(${1:ent}, ${2:Comp})", "fn is_changed(ent: int, Comp) -> int"),
+                    ("clear_changed", "clear_changed()", "fn clear_changed()"),
+                    ("set_group", "set_group(${1:ent}, ${2:group_id})", "fn set_group(ent: int, group_id: int)"),
+                    ("group_of", "group_of(${1:ent})", "fn group_of(ent: int) -> int"),
+                    ("in_same_group", "in_same_group(${1:a}, ${2:b})", "fn in_same_group(a: int, b: int) -> int"),
                 ] {
                     items.push(CompletionItem {
                         label: m.to_string(),
@@ -703,6 +708,11 @@ impl LanguageServer for StrivLsp {
                     ("parent_of", "parent_of(${1:child})", "fn parent_of(child: int) -> int"),
                     ("has", "has(${1:ent}, ${2:Comp})", "fn has(ent: int, Comp) -> int"),
                     ("remove_comp", "remove_comp(${1:ent}, ${2:Comp})", "fn remove_comp(ent: int, Comp) -> int"),
+                    ("is_changed", "is_changed(${1:ent}, ${2:Comp})", "fn is_changed(ent: int, Comp) -> int"),
+                    ("clear_changed", "clear_changed()", "fn clear_changed()"),
+                    ("set_group", "set_group(${1:ent}, ${2:group_id})", "fn set_group(ent: int, group_id: int)"),
+                    ("group_of", "group_of(${1:ent})", "fn group_of(ent: int) -> int"),
+                    ("in_same_group", "in_same_group(${1:a}, ${2:b})", "fn in_same_group(a: int, b: int) -> int"),
                 ] {
                     items.push(CompletionItem {
                         label: m.to_string(),
@@ -798,6 +808,11 @@ impl LanguageServer for StrivLsp {
                     ("parent_of", "parent_of(${1:child})", "fn parent_of(child: int) -> int"),
                     ("has", "has(${1:ent}, ${2:Comp})", "fn has(ent: int, Comp) -> int"),
                     ("remove_comp", "remove_comp(${1:ent}, ${2:Comp})", "fn remove_comp(ent: int, Comp) -> int"),
+                    ("is_changed", "is_changed(${1:ent}, ${2:Comp})", "fn is_changed(ent: int, Comp) -> int"),
+                    ("clear_changed", "clear_changed()", "fn clear_changed()"),
+                    ("set_group", "set_group(${1:ent}, ${2:group_id})", "fn set_group(ent: int, group_id: int)"),
+                    ("group_of", "group_of(${1:ent})", "fn group_of(ent: int) -> int"),
+                    ("in_same_group", "in_same_group(${1:a}, ${2:b})", "fn in_same_group(a: int, b: int) -> int"),
                 ] {
                     items.push(CompletionItem {
                         label: m.to_string(),

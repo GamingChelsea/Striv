@@ -94,7 +94,7 @@ export function Layout({
                     : 'border-zinc-200 bg-white text-zinc-600'
                 }`}
               >
-                v1.3
+                v1.4
               </span>
             </button>
           </div>

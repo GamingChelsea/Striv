@@ -184,6 +184,7 @@ struct CompileEnv<'a> {
     ecs_query_run_ref: cranelift::codegen::ir::FuncRef,
     ecs_has_ref: cranelift::codegen::ir::FuncRef,
     ecs_remove_comp_ref: cranelift::codegen::ir::FuncRef,
+    ecs_is_changed_ref: cranelift::codegen::ir::FuncRef,
     mods_load_ref: cranelift::codegen::ir::FuncRef,
     mods_count_ref: cranelift::codegen::ir::FuncRef,
     mods_init_ref: cranelift::codegen::ir::FuncRef,
@@ -324,6 +325,10 @@ impl JitCompiler {
         builder.symbol(
             "striv_ecs_remove_comp",
             lang_runtime::striv_ecs_remove_comp as *const u8,
+        );
+        builder.symbol(
+            "striv_ecs_is_changed",
+            lang_runtime::striv_ecs_is_changed as *const u8,
         );
         builder.symbol(
             "striv_struct_to_json",
@@ -822,6 +827,10 @@ impl JitCompiler {
             .module
             .declare_function("striv_ecs_remove_comp", Linkage::Import, &sig_3i_i)
             .unwrap();
+        let ecs_is_changed_id = self
+            .module
+            .declare_function("striv_ecs_is_changed", Linkage::Import, &sig_3i_i)
+            .unwrap();
         let mut sig_1i_i = self.module.make_signature();
         sig_1i_i.params.push(AbiParam::new(int_ty));
         sig_1i_i.returns.push(AbiParam::new(int_ty));
@@ -1296,6 +1305,9 @@ impl JitCompiler {
                     ecs_remove_comp_ref: self
                         .module
                         .declare_func_in_func(ecs_remove_comp_id, builder.func),
+                    ecs_is_changed_ref: self
+                        .module
+                        .declare_func_in_func(ecs_is_changed_id, builder.func),
                     mods_load_ref: self.module.declare_func_in_func(mods_load_id, builder.func),
                     mods_count_ref: self.module.declare_func_in_func(mods_count_id, builder.func),
                     mods_init_ref: self.module.declare_func_in_func(mods_init_id, builder.func),
@@ -1716,8 +1728,10 @@ fn is_float_expr(expr: &Expr, vars: &HashMap<String, VarInfo>, env: &CompileEnv)
             false
         }
         Expr::BinOp { left, op, right } => {
-            !matches!(op, Op::Lt | Op::Gt | Op::Eq)
-                && (is_float_expr(left, vars, env) || is_float_expr(right, vars, env))
+            !matches!(
+                op,
+                Op::Lt | Op::Gt | Op::LtEq | Op::GtEq | Op::Eq | Op::NotEq | Op::And | Op::Or
+            ) && (is_float_expr(left, vars, env) || is_float_expr(right, vars, env))
         }
         _ => false,
     }
@@ -1966,7 +1980,7 @@ fn compile_method_call(
             }
         }
     }
-    if (method == "has" || method == "remove_comp") && args.len() == 2 {
+    if (method == "has" || method == "remove_comp" || method == "is_changed") && args.len() == 2 {
         let ecs_var_opt = match vars.get(receiver) {
             Some(VarInfo::Handle {
                 var, type_name, ..
@@ -1986,8 +2000,10 @@ fn compile_method_call(
                 .iconst(env.int_ty, striv_syntax::fnv1a_64(comp_name));
             let func_ref = if method == "has" {
                 env.ecs_has_ref
-            } else {
+            } else if method == "remove_comp" {
                 env.ecs_remove_comp_ref
+            } else {
+                env.ecs_is_changed_ref
             };
             let c = builder.ins().call(func_ref, &[ecs_ptr, ent_val, tid]);
             return builder.inst_results(c)[0];
@@ -2904,7 +2920,13 @@ fn compile_stmt_with_rest(
                     );
                 } else {
                     let val = compile_expr(value, builder, vars, env);
-                    let is_f = builder.func.dfg.value_type(val) == types::F64;
+                    let val_ty = builder.func.dfg.value_type(val);
+                    let is_f = val_ty == types::F64;
+                    let val = if !is_f && val_ty != env.int_ty {
+                        builder.ins().uextend(env.int_ty, val)
+                    } else {
+                        val
+                    };
                     let var = builder.declare_var(if is_f { types::F64 } else { env.int_ty });
                     builder.def_var(var, val);
                     vars.insert(
@@ -2936,7 +2958,13 @@ fn compile_stmt_with_rest(
             } else {
                 // Case B: Regular integer or float-returning call
                 let val = compile_expr(value, builder, vars, env);
-                let is_f = builder.func.dfg.value_type(val) == types::F64;
+                let val_ty = builder.func.dfg.value_type(val);
+                let is_f = val_ty == types::F64;
+                let val = if !is_f && val_ty != env.int_ty {
+                    builder.ins().uextend(env.int_ty, val)
+                } else {
+                    val
+                };
                 let var = builder.declare_var(if is_f { types::F64 } else { env.int_ty });
                 builder.def_var(var, val);
                 vars.insert(
@@ -4881,7 +4909,7 @@ fn collect_free_vars_in_expr(
             if !bound.contains(receiver) && !out.contains(receiver) {
                 out.push(receiver.clone());
             }
-            if (method == "has" || method == "remove_comp") && args.len() == 2 {
+            if (method == "has" || method == "remove_comp" || method == "is_changed") && args.len() == 2 {
                 collect_free_vars_in_expr(&args[0], bound, out);
             } else {
                 for a in args {

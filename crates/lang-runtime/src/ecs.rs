@@ -1,11 +1,12 @@
 use rayon::prelude::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 pub struct ComponentPool {
     pub elem_size: usize,
     pub entities: Vec<i64>,
     pub data: Vec<u8>,
     pub index_of: HashMap<i64, usize>,
+    pub changed: HashSet<i64>,
 }
 
 impl ComponentPool {
@@ -15,10 +16,12 @@ impl ComponentPool {
             entities: Vec::new(),
             data: Vec::new(),
             index_of: HashMap::new(),
+            changed: HashSet::new(),
         }
     }
 
     fn upsert(&mut self, entity: i64, bytes: &[u8]) {
+        self.changed.insert(entity);
         if let Some(&idx) = self.index_of.get(&entity) {
             let off = idx * self.elem_size;
             self.data[off..off + self.elem_size].copy_from_slice(bytes);
@@ -41,6 +44,7 @@ pub struct StrivEcs {
     next_entity: i64,
     pools: HashMap<i64, ComponentPool>,
     pub parents: HashMap<i64, i64>,
+    pub groups: HashMap<i64, i64>,
 }
 
 #[unsafe(no_mangle)]
@@ -49,7 +53,44 @@ pub extern "C" fn striv_ecs_new() -> *mut StrivEcs {
         next_entity: 1,
         pools: HashMap::new(),
         parents: HashMap::new(),
+        groups: HashMap::new(),
     }))
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_ecs_set_group(ecs: *mut StrivEcs, entity: i64, group_id: i64) -> i64 {
+    let w = unsafe { &mut *ecs };
+    w.groups.insert(entity, group_id);
+    0
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_ecs_group_of(ecs: *const StrivEcs, entity: i64) -> i64 {
+    let w = unsafe { &*ecs };
+    w.groups.get(&entity).copied().unwrap_or(0)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_ecs_in_same_group(ecs: *const StrivEcs, a: i64, b: i64) -> i64 {
+    let w = unsafe { &*ecs };
+    (w.groups.get(&a).copied().unwrap_or(0) == w.groups.get(&b).copied().unwrap_or(0)) as i64
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_ecs_is_changed(ecs: *const StrivEcs, entity: i64, type_id: i64) -> i64 {
+    let w = unsafe { &*ecs };
+    w.pools
+        .get(&type_id)
+        .is_some_and(|p| p.changed.contains(&entity)) as i64
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_ecs_clear_changed(ecs: *mut StrivEcs) -> i64 {
+    let w = unsafe { &mut *ecs };
+    for pool in w.pools.values_mut() {
+        pool.changed.clear();
+    }
+    0
 }
 
 #[unsafe(no_mangle)]
@@ -156,6 +197,7 @@ pub extern "C" fn striv_ecs_remove_entity(ecs: *mut StrivEcs, root_entity: i64) 
 
     for ent in to_delete {
         w.parents.remove(&ent);
+        w.groups.remove(&ent);
         for pool in w.pools.values_mut() {
             if let Some(idx) = pool.index_of.remove(&ent) {
                 let last_idx = pool.entities.len() - 1;
