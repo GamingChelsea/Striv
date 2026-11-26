@@ -1,4 +1,5 @@
 name = "Striv"
+grammar = "striv"
 path_suffixes = ["strv"]
 line_comments = ["// "]
 tab_size = 4

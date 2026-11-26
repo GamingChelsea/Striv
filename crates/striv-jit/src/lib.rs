@@ -1634,7 +1634,7 @@ impl JitCompiler {
                                 is_mut: false,
                             },
                         );
-                    } else if ty_name == "String" {
+                    } else if ty_name == "String" || ty_name == "str" {
                         vars.insert(
                             name.clone(),
                             VarInfo::Str {
@@ -5073,7 +5073,7 @@ fn collect_parallel_in_stmts(
                 params.extend(terms.clone());
                 let mut cap_names = Vec::new();
                 for cap in free {
-                    let (cap_ty, _) = local_types
+                    let (cap_ty, cap_mut) = local_types
                         .get(&cap)
                         .cloned()
                         .unwrap_or_else(|| ("int".to_string(), false));
@@ -5082,7 +5082,7 @@ fn collect_parallel_in_stmts(
                     } else {
                         cap_ty
                     };
-                    params.push((cap.clone(), param_ty, false));
+                    params.push((cap.clone(), param_ty, cap_mut));
                     cap_names.push(cap);
                 }
                 let helper_name = format!("__ecs_query_{}", *next_id);
