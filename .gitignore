@@ -33,5 +33,6 @@ node_modules/
 
 # Striv auto-bindgen host cache
 .striv-host/
+.striv/
 .striv-release/
 *.exe

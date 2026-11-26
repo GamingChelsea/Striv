@@ -541,6 +541,8 @@ pub fn std_collection_symbols() -> Vec<(&'static str, *const u8, &'static str, b
         ("Window::height", crate::striv_window_height as *const u8, "i->i", false),
         ("Window::present", crate::striv_window_present as *const u8, "i->i", false),
         ("to_int", striv_to_int as *const u8, "f->i", false),
+        ("Time::now_ms", striv_time_now_ms as *const u8, "->i", false),
+        ("Time::sleep_ms", striv_time_sleep_ms as *const u8, "i->i", false),
         ("String::trim", striv_str_trim as *const u8, "i->i", false),
         ("String::contains", striv_str_contains as *const u8, "ii->i", false),
         ("String::starts_with", striv_str_starts_with as *const u8, "ii->i", false),
@@ -789,6 +791,24 @@ pub extern "C" fn striv_svec_to_bytes(v_ptr: *const RawStructVec) -> *mut Vec<u8
 #[unsafe(no_mangle)]
 pub extern "C" fn striv_to_int(x: f64) -> i64 {
     x as i64
+}
+
+static START_TIME: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_time_now_ms() -> i64 {
+    START_TIME
+        .get_or_init(std::time::Instant::now)
+        .elapsed()
+        .as_millis() as i64
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_time_sleep_ms(ms: i64) -> i64 {
+    if ms > 0 {
+        std::thread::sleep(std::time::Duration::from_millis(ms as u64));
+    }
+    0
 }
 
 #[unsafe(no_mangle)]

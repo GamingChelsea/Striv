@@ -806,10 +806,10 @@ pub extern "C" fn striv_ecs_query_run(
 
 unsafe fn invoke_query_fn(addr: usize, comps: &[usize], caps: &[i64]) {
     let total = comps.len() + caps.len();
-    let mut all_args = [0i64; 8];
+    let mut all_args = [0i64; 12];
     assert!(
-        total <= 8,
-        "ECS query unterstützt bis zu 8 kombinierte Component- + Capture-Parameter"
+        total <= 12,
+        "ECS query unterstützt bis zu 12 kombinierte Component- + Capture-Parameter"
     );
     for (i, &p) in comps.iter().enumerate() {
         all_args[i] = p as i64;
@@ -887,6 +887,76 @@ unsafe fn invoke_query_fn(addr: usize, comps: &[usize], caps: &[i64]) {
                     all_args[5],
                     all_args[6],
                     all_args[7],
+                );
+            }
+            9 => {
+                std::mem::transmute::<
+                    *const (),
+                    fn(i64, i64, i64, i64, i64, i64, i64, i64, i64) -> i64,
+                >(ptr)(
+                    all_args[0],
+                    all_args[1],
+                    all_args[2],
+                    all_args[3],
+                    all_args[4],
+                    all_args[5],
+                    all_args[6],
+                    all_args[7],
+                    all_args[8],
+                );
+            }
+            10 => {
+                std::mem::transmute::<
+                    *const (),
+                    fn(i64, i64, i64, i64, i64, i64, i64, i64, i64, i64) -> i64,
+                >(ptr)(
+                    all_args[0],
+                    all_args[1],
+                    all_args[2],
+                    all_args[3],
+                    all_args[4],
+                    all_args[5],
+                    all_args[6],
+                    all_args[7],
+                    all_args[8],
+                    all_args[9],
+                );
+            }
+            11 => {
+                std::mem::transmute::<
+                    *const (),
+                    fn(i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64) -> i64,
+                >(ptr)(
+                    all_args[0],
+                    all_args[1],
+                    all_args[2],
+                    all_args[3],
+                    all_args[4],
+                    all_args[5],
+                    all_args[6],
+                    all_args[7],
+                    all_args[8],
+                    all_args[9],
+                    all_args[10],
+                );
+            }
+            12 => {
+                std::mem::transmute::<
+                    *const (),
+                    fn(i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64) -> i64,
+                >(ptr)(
+                    all_args[0],
+                    all_args[1],
+                    all_args[2],
+                    all_args[3],
+                    all_args[4],
+                    all_args[5],
+                    all_args[6],
+                    all_args[7],
+                    all_args[8],
+                    all_args[9],
+                    all_args[10],
+                    all_args[11],
                 );
             }
             _ => {}

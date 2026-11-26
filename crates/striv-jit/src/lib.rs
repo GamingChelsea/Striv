@@ -3770,6 +3770,7 @@ fn compile_stmt_with_rest(
                 Some(VarInfo::Handle { var, type_name, .. }) if type_name == "Ecs" => {
                     builder.use_var(*var)
                 }
+                Some(VarInfo::Int { var, .. }) => builder.use_var(*var),
                 _ => panic!("'{}' is not an Ecs instance", ecs_var),
             };
             let key = format!(
