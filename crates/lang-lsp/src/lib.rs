@@ -171,6 +171,9 @@ impl LanguageServer for StrivLsp {
         let current_line = lines.get(pos.line as usize).copied().unwrap_or("");
         let col = (pos.character as usize).min(current_line.len());
         let before_cursor = &current_line[..col];
+        if before_cursor.trim_start().starts_with("unit ") && !before_cursor.contains('=') {
+            return Ok(None);
+        }
 
         // Blank out the current line so the parser can still parse all structs & impls
         let clean_src: String = lines

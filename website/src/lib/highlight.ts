@@ -178,9 +178,14 @@ function tokenizeCodeLine(line: string, kwSet: Set<string>, tySet: Set<string>):
       while (j < line.length && /[a-zA-Z0-9_]/.test(line[j])) j++
       const word = line.slice(i, j)
 
+      const prevNonWs = [...tokens].reverse().find((t) => t.text.trim().length > 0)
       if (kwSet.has(word)) {
         tokens.push({ kind: 'keyword', text: word })
-      } else if (tySet.has(word) || /^[A-Z][A-Za-z0-9_]*$/.test(word)) {
+      } else if (
+        tySet.has(word) ||
+        /^[A-Z][A-Za-z0-9_]*$/.test(word) ||
+        prevNonWs?.text === 'unit'
+      ) {
         tokens.push({ kind: 'type', text: word })
       } else if (line[j] === '(') {
         tokens.push({ kind: 'function', text: word })
