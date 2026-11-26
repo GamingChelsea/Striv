@@ -12,6 +12,7 @@ import {
   OverviewChapter,
 } from './chapters/IntroAndGuides'
 import { KeywordsTypesChapter } from './chapters/KeywordsTypesChapter'
+import { ReferenceDocsChapter } from './chapters/ReferenceDocsChapter'
 import {
   ConcurrencyChapter,
   EcsChapter,
@@ -130,6 +131,9 @@ export function App() {
         )}
         {activeChapter === 'keywords-types' && (
           <KeywordsTypesChapter dialect={dialect} theme={theme} lang={lang} />
+        )}
+        {activeChapter === 'reference' && (
+          <ReferenceDocsChapter dialect={dialect} theme={theme} lang={lang} />
         )}
         {activeChapter === 'concurrency' && (
           <ConcurrencyChapter dialect={dialect} theme={theme} lang={lang} />

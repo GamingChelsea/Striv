@@ -16,6 +16,7 @@ export type ChapterId =
   | 'enums-generics'
   | 'units'
   | 'keywords-types'
+  | 'reference'
   | 'concurrency'
   | 'ecs'
   | 'networking'
@@ -166,6 +167,16 @@ export const CHAPTERS: ChapterMeta[] = [
       { id: 'all-types', label: { en: 'All Types & Layouts', de: 'Alle Typen & Layouts' } },
       { id: 'all-operators', label: { en: 'Operators & Precedence', de: 'Operatoren & Präzedenz' } },
     ],
+  },
+  {
+    id: 'reference',
+    title: { en: 'Reference Docs (Rustdoc)', de: 'Referenz-Docs (Rustdoc)' },
+    group: { en: 'Type System', de: 'Typsystem' },
+    description: {
+      en: 'Interactive Rustdoc-style reference for keywords, types, and built-in modules.',
+      de: 'Interaktive Referenz im Rustdoc-Stil für Keywords, Typen und eingebaute Module.',
+    },
+    toc: [],
   },
   {
     id: 'concurrency',

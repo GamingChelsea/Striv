@@ -270,8 +270,8 @@ striv lsp`}
       <DocP theme={theme}>
         {tr(
           lang,
-          'Prebuilt binaries and editor extensions are published in GitHub Release v1.1.0 (striv.exe, striv-vscode-ext.zip, striv-zed-ext.zip). Place striv.exe on your system PATH so editors can launch striv lsp.',
-          'Fertige Binaries und Editor-Extensions liegen im GitHub Release v1.1.0 (striv.exe, striv-vscode-ext.zip, striv-zed-ext.zip). Lege striv.exe in deinen System-PATH, damit Editoren striv lsp starten können.',
+          'Prebuilt binaries and editor extensions are published in GitHub Release v1.2.0 (striv.exe, striv-vscode-ext.zip, striv-zed-ext.zip). Place striv.exe on your system PATH so editors can launch striv lsp.',
+          'Fertige Binaries und Editor-Extensions liegen im GitHub Release v1.2.0 (striv.exe, striv-vscode-ext.zip, striv-zed-ext.zip). Lege striv.exe in deinen System-PATH, damit Editoren striv lsp starten können.',
         )}
       </DocP>
       <DocTable
