@@ -2,7 +2,7 @@
   "name": "striv-vscode",
   "displayName": "Striv Support",
   "publisher": "local",
-  "version": "1.5.0",
+  "version": "1.5.2",
   "engines": {
     "vscode": "^1.80.0"
   },
