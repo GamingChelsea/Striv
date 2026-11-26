@@ -1,0 +1,11 @@
+id = "striv"
+name = "Striv"
+version = "1.0.0"
+schema_version = 1
+authors = ["GamingChelsea"]
+description = "Striv 1.0 language support and LSP (striv lsp) for Zed"
+repository = "https://github.com/GamingChelsea/Striv"
+
+[language_servers.striv]
+name = "Striv Language Server"
+language = "Striv"

@@ -55,6 +55,23 @@ Der Language Server (`lang-lsp`) ist direkt in `striv.exe` (`striv lsp`) integri
    - Windows: `%USERPROFILE%\.vscode\extensions\striv-lang\`
    - Führe dort einmalig `npm install --omit=dev` aus und starte VS Code neu.
 
+### Zed Editor
+
+Der gleiche Language Server (`striv lsp`) funktioniert auch in **Zed**:
+
+1. Stelle sicher, dass `striv.exe` im System-`PATH` liegt.
+2. Entpacke `striv-zed-ext.zip` aus dem Release (oder nutze `zed-ext/` im Repo) und wähle in Zed **Extensions → Install Dev Extension** auf den Ordner `zed-ext`.
+3. Alternativ kannst du in deiner Zed-`settings.json` direkt auf `striv lsp` verweisen:
+   ```json
+   {
+     "lsp": {
+       "striv": {
+         "binary": { "path": "striv", "arguments": ["lsp"] }
+       }
+     }
+   }
+   ```
+
 ---
 
 ## Workspace-Struktur
