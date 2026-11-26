@@ -4871,4 +4871,35 @@ test "String und Mathe" {
             }
         }
     }
+
+    #[test]
+    fn test_sandbox_docs_example_rust_and_odin() {
+        let rust_src = r#"
+fn mod_tick() -> int {
+    let mut sum = 0
+    for i in 0..10 {
+        sum += i
+    }
+    return sum
+}
+"#;
+        let prog = striv_syntax::Parser::new(rust_src).parse_program();
+        let mut jit = JitCompiler::new_sandboxed();
+        let _ = jit.compile_program(&prog);
+
+        let odin_src = r#"
+mod_tick :: proc() -> int {
+    sum := 0
+    for i in 0..10 {
+        sum += i
+    }
+    return sum
+}
+"#;
+        let prog_odin =
+            striv_syntax::Parser::new_with_dialect(odin_src, striv_syntax::Dialect::Odin)
+                .parse_program();
+        let mut jit_odin = JitCompiler::new_sandboxed();
+        let _ = jit_odin.compile_program(&prog_odin);
+    }
 }

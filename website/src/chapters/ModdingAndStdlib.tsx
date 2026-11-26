@@ -45,6 +45,27 @@ check_res :: proc() -> int {
           'Über JitCompiler::new_sandboxed() kompiliert Striv Mod-Code mit Schleifen-Gas-Guards (set_sandbox_gas, take_sandbox_aborted) und blockiert Datei-I/O sowie externe C-Bibliotheken bereits zur Compile-Zeit.',
         )}
       </DocP>
+      <CodeBlock
+        dialect={dialect}
+        theme={theme}
+        filename="sandbox_mod.strv"
+        code={`// Compiled with JitCompiler::new_sandboxed()
+fn mod_tick() -> int {
+    let mut sum = 0
+    for i in 0..10 {
+        sum += i
+    }
+    return sum
+}`}
+        odinCode={`// Mit JitCompiler::new_sandboxed() kompiliert
+mod_tick :: proc() -> int {
+    sum := 0
+    for i in 0..10 {
+        sum += i
+    }
+    return sum
+}`}
+      />
 
       <DocH2 id="csharp-bindgen" theme={theme}>
         {tr(lang, 'C# Bindings (striv bindgen-cs)', 'C#-Bindings (striv bindgen-cs)')}
@@ -56,6 +77,29 @@ check_res :: proc() -> int {
           'striv bindgen-cs api.strv StrivModApi.cs generiert [StructLayout(LayoutKind.Sequential)]-Structs (inklusive __dirty_mask), identische open enum-Konstanten, RpcId_* und [LibraryImport]-Signaturen.',
         )}
       </DocP>
+      <CodeBlock
+        dialect={dialect}
+        theme={theme}
+        filename="api.strv"
+        code={`open enum Resource { LiquidFuel, Oxidizer }
+
+struct Ship { sync x: float, sync hp: int }
+
+rpc fn spawn_ship(hp: int) -> int {
+    return hp
+}
+
+// CLI: striv bindgen-cs api.strv StrivModApi.cs`}
+        odinCode={`Resource :: open enum { LiquidFuel, Oxidizer }
+
+Ship :: struct { sync x: float, sync hp: int }
+
+spawn_ship :: rpc proc(hp: int) -> int {
+    return hp
+}
+
+// CLI: striv bindgen-cs api.strv StrivModApi.cs`}
+      />
 
       <DocH2 id="rust-c-ffi" theme={theme}>
         {tr(lang, 'Direct C-FFI (No Rust Blocks Needed)', 'Direktes C-FFI (ohne Rust-Blöcke)')}

@@ -127,4 +127,36 @@ rpc fn fire_laser(mut s: Ship, power: float) {}
         assert!(cs.contains("public const uint RpcId_fire_laser"));
         assert!(cs.contains("public static partial long fire_laser(ref Ship s, double power);"));
     }
+
+    #[test]
+    fn test_csharp_bindgen_docs_example_rust_and_odin() {
+        let rust_src = r#"
+open enum Resource { LiquidFuel, Oxidizer }
+struct Ship { sync x: float, sync hp: int }
+rpc fn spawn_ship(hp: int) -> int {
+    return hp
+}
+"#;
+        let mut prog = crate::Parser::new(rust_src).parse_program();
+        crate::merge_open_enums(&mut prog);
+        let cs = generate_csharp_bindings(&prog, "striv_game");
+        assert!(cs.contains("public static class Resource"));
+        assert!(cs.contains("public ulong __dirty_mask;"));
+        assert!(cs.contains("public const uint RpcId_spawn_ship"));
+
+        let odin_src = r#"
+Resource :: open enum { LiquidFuel, Oxidizer }
+Ship :: struct { sync x: float, sync hp: int }
+spawn_ship :: rpc proc(hp: int) -> int {
+    return hp
+}
+"#;
+        let mut prog_odin =
+            crate::Parser::new_with_dialect(odin_src, crate::Dialect::Odin).parse_program();
+        crate::merge_open_enums(&mut prog_odin);
+        let cs_odin = generate_csharp_bindings(&prog_odin, "striv_game");
+        assert!(cs_odin.contains("public static class Resource"));
+        assert!(cs_odin.contains("public ulong __dirty_mask;"));
+        assert!(cs_odin.contains("public const uint RpcId_spawn_ship"));
+    }
 }
