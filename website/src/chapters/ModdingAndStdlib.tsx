@@ -58,25 +58,58 @@ check_res :: proc() -> int {
       </DocP>
 
       <DocH2 id="rust-c-ffi" theme={theme}>
-        {tr(lang, 'Rust Interop & Direct C-FFI', 'Rust-Interop & direktes C-FFI')}
+        {tr(lang, 'Direct C-FFI (No Rust Blocks Needed)', 'Direktes C-FFI (ohne Rust-Blöcke)')}
       </DocH2>
+      <DocP theme={theme}>
+        {tr(
+          lang,
+          'Call any C .dll or .so directly via foreign / extern without writing rust { ... } wrappers or running striv sync. Use cstr for null-terminated C strings.',
+          'Rufe beliebige C-.dlls oder .so-Bibliotheken direkt über foreign / extern auf – ganz ohne rust { ... }-Wrapper und ohne striv sync. Der Typ cstr konvertiert Striv-Strings automatisch in null-terminierte C-Strings.',
+        )}
+      </DocP>
       <CodeBlock
         dialect={dialect}
         theme={theme}
-        filename="interop.strv"
+        filename="c_ffi.strv"
         code={`extern "msvcrt.dll" fn abs(x: i32) -> i32
 extern "msvcrt.dll" fn strlen(s: cstr) -> int
 
-rust { pub struct RustRocket { pub fuel: i64 } }
-rust fn make_rocket(f: int) -> int {
-    crate::box_any_handle(RustRocket { fuel: f })
+fn main() {
+    let val = abs(-100)
+    let len = strlen("Striv Engine")
+    print("Abs: {val}, Len: {len}")
 }`}
         odinCode={`foreign "msvcrt.dll" {
     abs :: proc(x: i32) -> i32
     strlen :: proc(s: cstr) -> int
 }
 
-rust { pub struct RustRocket { pub fuel: i64 } }
+main :: proc() {
+    val := abs(-100)
+    len := strlen("Striv Engine")
+    print("Abs: {val}, Len: {len}")
+}`}
+      />
+
+      <DocH2 id="rust-interop" theme={theme}>
+        {tr(lang, 'Inline Rust Interop (rust fn / rust proc)', 'Inline-Rust-Interop (rust fn / rust proc)')}
+      </DocH2>
+      <DocP theme={theme}>
+        {tr(
+          lang,
+          'Only needed when embedding full Rust crates (like wgpu or bevy) via striv sync.',
+          'Wird nur benötigt, wenn du ganze Rust-Crates (wie wgpu oder bevy) über striv sync einbinden möchtest.',
+        )}
+      </DocP>
+      <CodeBlock
+        dialect={dialect}
+        theme={theme}
+        filename="rust_interop.strv"
+        code={`rust { pub struct RustRocket { pub fuel: i64 } }
+rust fn make_rocket(f: int) -> int {
+    crate::box_any_handle(RustRocket { fuel: f })
+}`}
+        odinCode={`rust { pub struct RustRocket { pub fuel: i64 } }
 rust proc make_rocket(f: int) -> int {
     crate::box_any_handle(RustRocket { fuel: f })
 }`}
