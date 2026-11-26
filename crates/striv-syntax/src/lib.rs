@@ -2960,4 +2960,32 @@ main :: proc() {
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
+
+    #[test]
+    fn test_fmt_preserves_units_rust_blocks_and_query() {
+        let src = r#"
+unit m
+unit s
+unit kg
+unit Velocity = m / s
+unit Accel = m / (s * s)
+unit Force = kg * Accel
+
+rust { pub struct Foo { pub x: i64 } }
+
+fn step(mut ecs: Ecs) {
+    query (id: entity, mut orb: Orbit, !Docked) in ecs {
+        orb.alt += 1.0
+    }
+}
+"#;
+        let prog = Parser::new(src).parse_program();
+        let formatted = format_program_with_dialect(&prog, Dialect::Rust);
+        assert!(formatted.contains("unit m\n"));
+        assert!(formatted.contains("unit Velocity = m / s\n"));
+        assert!(formatted.contains("unit Accel = m / (s * s)\n"));
+        assert!(formatted.contains("unit Force = kg * Accel\n"));
+        assert!(formatted.contains("rust { pub struct Foo { pub x: i64 } }"));
+        assert!(formatted.contains("query (id: entity, mut orb: Orbit, !Docked) in ecs {"));
+    }
 }

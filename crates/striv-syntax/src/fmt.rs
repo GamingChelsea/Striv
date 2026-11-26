@@ -135,6 +135,21 @@ pub fn format_program_with_options(
         out.push('\n');
     }
 
+    for u in &prog.units {
+        if let Some(formula) = &u.formula {
+            out.push_str(&format!("unit {} = {}\n", u.name, format_unit_expr(formula)));
+        } else {
+            out.push_str(&format!("unit {}\n", u.name));
+        }
+    }
+    if !prog.units.is_empty() {
+        out.push('\n');
+    }
+
+    for rb in &prog.rust_blocks {
+        out.push_str(&format!("rust {{{}}}\n\n", rb));
+    }
+
     for ext in &prog.extern_fns {
         let params: Vec<String> = ext
             .params
@@ -355,7 +370,38 @@ fn format_stmt(stmt: &Stmt, level: usize, out: &mut String) {
         }
         Stmt::Break => out.push_str(&format!("{}break\n", ind)),
         Stmt::Continue => out.push_str(&format!("{}continue\n", ind)),
-        Stmt::Query { .. } => out.push_str(&format!("{}// query\n", ind)),
+        Stmt::Query {
+            entity_var,
+            terms,
+            without,
+            ecs_var,
+            is_parallel,
+            body,
+        } => {
+            let par = if *is_parallel { "parallel " } else { "" };
+            let mut parts: Vec<String> = Vec::new();
+            if let Some(ev) = entity_var {
+                parts.push(format!("{}: entity", ev));
+            }
+            for (v, t, m) in terms {
+                let mp = if *m { "mut " } else { "" };
+                parts.push(format!("{}{}: {}", mp, v, t));
+            }
+            for w in without {
+                parts.push(format!("!{}", w));
+            }
+            out.push_str(&format!(
+                "{}{}query ({}) in {} {{\n",
+                ind,
+                par,
+                parts.join(", "),
+                ecs_var
+            ));
+            for s in body {
+                format_stmt(s, level + 1, out);
+            }
+            out.push_str(&format!("{}}}\n", ind));
+        }
         Stmt::Defer(inner) => {
             out.push_str(&format!("{}defer ", ind));
             if let Stmt::Block(stmts) = &**inner {
@@ -607,6 +653,20 @@ fn format_stmt(stmt: &Stmt, level: usize, out: &mut String) {
 
 fn format_args(args: &[Expr]) -> String {
     args.iter().map(format_expr).collect::<Vec<_>>().join(", ")
+}
+
+pub fn format_unit_expr(expr: &crate::UnitExpr) -> String {
+    match expr {
+        crate::UnitExpr::Name(n) => n.clone(),
+        crate::UnitExpr::Mul(l, r) => format!("{} * {}", format_unit_expr(l), format_unit_expr(r)),
+        crate::UnitExpr::Div(l, r) => {
+            let r_str = match &**r {
+                crate::UnitExpr::Name(n) => n.clone(),
+                _ => format!("({})", format_unit_expr(r)),
+            };
+            format!("{} / {}", format_unit_expr(l), r_str)
+        }
+    }
 }
 
 pub fn format_expr(expr: &Expr) -> String {
