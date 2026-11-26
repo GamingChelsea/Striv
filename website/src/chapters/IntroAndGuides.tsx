@@ -246,11 +246,22 @@ striv remove glam`}
       <DocH2 id="fmt-lsp" theme={theme}>
         fmt, switch-syntax &amp; lsp
       </DocH2>
+      <DocP theme={theme}>
+        {tr(
+          lang,
+          'striv new and striv switch-syntax support two syntax dialects (--rust / --odin) and two brace styles: --kr (K&R: opening { on the same line, default) and --allman (Allman: opening { on a new line).',
+          'striv new und striv switch-syntax unterstützen zwei Syntax-Dialekte (--rust / --odin) sowie zwei Klammerstile: --kr (K&R: öffnende { in derselben Zeile, Standard) und --allman (Allman: öffnende { in einer neuen Zeile).',
+        )}
+      </DocP>
       <CodeBlock
         lang="bash"
         theme={theme}
         filename="terminal"
-        code={`# Format source according to striv.toml
+        code={`# Create a new project (Rust dialect + K&R braces, or Odin dialect + Allman braces)
+striv new space_game --rust --kr
+striv new space_game --odin --allman
+
+# Format source according to striv.toml
 striv fmt src/main.strv
 
 # Convert project between Rust and Odin dialects
@@ -258,6 +269,31 @@ striv switch-syntax odin src/main.strv --kr
 
 # Start Language Server for VS Code & Zed
 striv lsp`}
+      />
+      <CodeBlock
+        dialect={dialect}
+        theme={theme}
+        filename="brace_styles.strv"
+        code={`// --kr (K&R, default)
+fn tick(dt: float) {
+    print("dt = {dt}")
+}
+
+// --allman (Allman)
+fn tick_allman(dt: float)
+{
+    print("dt = {dt}")
+}`}
+        odinCode={`// --kr (K&R, Standard)
+tick :: proc(dt: float) {
+    print("dt = {dt}")
+}
+
+// --allman (Allman)
+tick_allman :: proc(dt: float)
+{
+    print("dt = {dt}")
+}`}
       />
 
       <DocH3>

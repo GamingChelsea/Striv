@@ -1,11 +1,12 @@
-# Striv 1.0
+# Striv 1.2
 
+> **Sprache / Language:** Deutsch | [English README](README.en.md)
 > **Transparenz-Hinweis:** Dieses gesamte Projekt (Compiler, Cranelift-JIT, Runtime, Bindgen, LSP, CLI und Dokumentations-Website) wurde vollständig **vibe-coded** – iterativ mit KI-Unterstützung entwickelt und direkt gegen echte Testsuiten verifiziert.
 
 **Striv** ist eine statisch kompilierte Systemsprache mit **2-ms Cranelift-JIT** für die Entwicklung und einem **Rust/LLVM-Release-Transpiler** für optimierte Executables. Sie unterstützt wahlweise **Rust-Syntax** (`syntax = "rust"`) oder **Odin-Syntax** (`syntax = "odin"`) über `striv.toml`.
 
 - **Dokumentation (GitHub Pages):** https://gamingchelsea.github.io/Striv/
-- **Windows Release (`striv.exe` + LSP v1.0.0):** https://github.com/GamingChelsea/Striv/releases/tag/v1.0.0
+- **Windows Release (`striv.exe` + LSP v1.2.0):** https://github.com/GamingChelsea/Striv/releases/tag/v1.2.0
 
 ---
 
