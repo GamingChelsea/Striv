@@ -2225,6 +2225,14 @@ pub fn check_diagnostics(src: &str) -> Vec<ParseError> {
 }
 
 pub fn check_diagnostics_with_dialect(src: &str, dialect: Dialect) -> Vec<ParseError> {
+    check_diagnostics_with_dialect_and_tweaks(src, dialect, &[])
+}
+
+pub fn check_diagnostics_with_dialect_and_tweaks(
+    src: &str,
+    dialect: Dialect,
+    extra_tweaks: &[String],
+) -> Vec<ParseError> {
     let mut errors = Vec::new();
     let rust_ranges = find_rust_block_ranges(src);
 
@@ -2279,16 +2287,27 @@ pub fn check_diagnostics_with_dialect(src: &str, dialect: Dialect) -> Vec<ParseE
         }
         Ok(prog) => {
             // 3. Semantic check (e.g. assignment without `mut`)
-            check_mutability(src, &prog, &mut errors);
+            check_mutability(src, &prog, extra_tweaks, &mut errors);
         }
     }
 
     errors
 }
 
-fn check_mutability(src: &str, prog: &Program, errors: &mut Vec<ParseError>) {
+fn check_mutability(
+    src: &str,
+    prog: &Program,
+    extra_tweaks: &[String],
+    errors: &mut Vec<ParseError>,
+) {
     for func in &prog.functions {
         let mut mut_vars = std::collections::HashMap::new();
+        for (t_name, _) in &prog.tweaks {
+            mut_vars.insert(t_name.clone(), true);
+        }
+        for t_name in extra_tweaks {
+            mut_vars.insert(t_name.clone(), true);
+        }
         for (name, _, is_mut) in &func.params {
             mut_vars.insert(name.clone(), *is_mut);
         }
@@ -2406,6 +2425,20 @@ fn check_stmts_mut(
                 check_stmts_mut(src, else_block, mut_vars, errors);
             }
             Stmt::While { body, .. } => {
+                check_stmts_mut(src, body, mut_vars, errors);
+            }
+            Stmt::Query {
+                entity_var,
+                terms,
+                body,
+                ..
+            } => {
+                if let Some(id) = entity_var {
+                    mut_vars.insert(id.clone(), false);
+                }
+                for (v, _, is_mut) in terms {
+                    mut_vars.insert(v.clone(), *is_mut);
+                }
                 check_stmts_mut(src, body, mut_vars, errors);
             }
             Stmt::Match { arms, .. } => {

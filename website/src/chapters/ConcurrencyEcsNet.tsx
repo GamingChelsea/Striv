@@ -200,7 +200,7 @@ step :: proc(dt: float) {
       />
 
       <DocH2 id="ecs-2-0" theme={theme}>
-        {tr(lang, 'Space-ECS 2.0: Entity IDs, Hierarchies & !Without', 'Space-ECS 2.0: Entity-IDs, Hierarchien & !Without')}
+        {tr(lang, 'StrivEcs 4.0: Hybrid Archetype + Sparse-Set, Relationships & Events', 'StrivEcs 4.0: Hybrid Archetype + Sparse-Set, Beziehungen & Events')}
       </DocH2>
       <DocP theme={theme}>
         {tr(

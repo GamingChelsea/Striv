@@ -25,7 +25,33 @@ fn dialect_from_uri(uri: &Url) -> striv_syntax::Dialect {
 impl StrivLsp {
     async fn validate(&self, uri: Url, text: &str) {
         let dialect = dialect_from_uri(&uri);
-        let parse_errors = striv_syntax::check_diagnostics_with_dialect(text, dialect);
+        let mut extra_tweaks = Vec::new();
+        if let Ok(file_path) = uri.to_file_path() {
+            if let Some(dir) = file_path.parent() {
+                for line in text.lines() {
+                    let t = line.trim();
+                    if let Some(mod_name) = t.strip_prefix("use ") {
+                        let mod_name = mod_name.trim();
+                        let mod_path = dir.join(format!("{}.strv", mod_name));
+                        if let Ok(mod_src) = std::fs::read_to_string(&mod_path) {
+                            for ml in mod_src.lines() {
+                                let mt = ml.trim();
+                                if let Some(rest) = mt.strip_prefix("tweak ") {
+                                    if let Some(name) = rest.split('=').next() {
+                                        let name = name.trim();
+                                        if !name.is_empty() {
+                                            extra_tweaks.push(name.to_string());
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let parse_errors =
+            striv_syntax::check_diagnostics_with_dialect_and_tweaks(text, dialect, &extra_tweaks);
         let mut diags: Vec<Diagnostic> = parse_errors
             .into_iter()
             .map(|err| Diagnostic {
@@ -507,24 +533,28 @@ impl LanguageServer for StrivLsp {
                 }
             }
             // Also load dynamic bridge metadata from .striv-host/striv_bridge_meta.json if present
-            if let Ok(meta_txt) = std::fs::read_to_string(".striv-host/striv_bridge_meta.json") {
-                for seg in meta_txt.split("\"name\":\"") .skip(1) {
+            if let Some(meta_txt) = find_project_bridge_meta(&params.text_document_position.text_document.uri) {
+                let prefix_lower = prefix.to_lowercase();
+                for seg in meta_txt.split("\"name\":\"").skip(1) {
                     if let Some((full_name, rest)) = seg.split_once('"') {
-                        if let Some(member) = full_name.strip_prefix(&prefix) {
-                            let sig = rest
-                                .split("\"sig\":\"")
-                                .nth(1)
-                                .and_then(|s| s.split('"').next())
-                                .unwrap_or("");
-                            items.push(CompletionItem {
-                                label: member.to_string(),
-                                kind: Some(CompletionItemKind::FUNCTION),
-                                insert_text: Some(format!("{}($0)", member)),
-                                insert_text_format: Some(InsertTextFormat::SNIPPET),
-                                detail: Some(format!("Dynamic Bridge ({})", sig)),
-                                sort_text: Some(format!("1_{}", member)),
-                                ..Default::default()
-                            });
+                        if full_name.to_lowercase().starts_with(&prefix_lower) && full_name.len() > prefix.len() {
+                            let member = &full_name[prefix.len()..];
+                            if !items.iter().any(|it| it.label == member) {
+                                let sig = rest
+                                    .split("\"sig\":\"")
+                                    .nth(1)
+                                    .and_then(|s| s.split('"').next())
+                                    .unwrap_or("");
+                                items.push(CompletionItem {
+                                    label: member.to_string(),
+                                    kind: Some(CompletionItemKind::FUNCTION),
+                                    insert_text: Some(format!("{}($0)", member)),
+                                    insert_text_format: Some(InsertTextFormat::SNIPPET),
+                                    detail: Some(format!("{} ({})", full_name.replace("__", "::"), sig)),
+                                    sort_text: Some(format!("1_{}", member)),
+                                    ..Default::default()
+                                });
+                            }
                         }
                     }
                 }
@@ -2050,6 +2080,20 @@ pub async fn run_lsp_server() {
         documents: RwLock::new(HashMap::new()),
     });
     Server::new(stdin, stdout, socket).serve(service).await;
+}
+
+fn find_project_bridge_meta(uri: &Url) -> Option<String> {
+    if let Ok(file_path) = uri.to_file_path() {
+        let mut cur = file_path.parent();
+        while let Some(dir) = cur {
+            let meta = dir.join(".striv-host").join("striv_bridge_meta.json");
+            if let Ok(txt) = std::fs::read_to_string(&meta) {
+                return Some(txt);
+            }
+            cur = dir.parent();
+        }
+    }
+    std::fs::read_to_string(".striv-host/striv_bridge_meta.json").ok()
 }
 
 fn collect_visible_vars(lines: &[&str], cursor_line: usize) -> Vec<(String, String)> {

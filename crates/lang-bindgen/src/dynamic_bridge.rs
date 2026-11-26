@@ -650,7 +650,7 @@ pub fn emit_dynamic_bridge_crate(
                  use winit::keyboard::KeyCode;\n\
                  match code {\n\
                      KeyCode::KeyW => 87, KeyCode::KeyA => 65, KeyCode::KeyS => 83, KeyCode::KeyD => 68,\n\
-                     KeyCode::KeyQ => 81, KeyCode::KeyE => 69, KeyCode::KeyZ => 90, KeyCode::KeyX => 88,\n\
+                     KeyCode::KeyQ => 81, KeyCode::KeyE => 69, KeyCode::KeyZ => 90, KeyCode::KeyY => 89, KeyCode::KeyX => 88,\n\
                      KeyCode::KeyG => 71, KeyCode::KeyM => 77,\n\
                      KeyCode::ShiftLeft | KeyCode::ShiftRight => 340,\n\
                      KeyCode::ControlLeft | KeyCode::ControlRight => 341,\n\

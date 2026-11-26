@@ -6,7 +6,7 @@
 **Striv** ist eine statisch kompilierte Systemsprache mit **2-ms Cranelift-JIT** für die Entwicklung und einem **Rust/LLVM-Release-Transpiler** für optimierte Executables. Sie unterstützt wahlweise **Rust-Syntax** (`syntax = "rust"`) oder **Odin-Syntax** (`syntax = "odin"`) über `striv.toml`.
 
 - **Dokumentation (GitHub Pages):** https://gamingchelsea.github.io/Striv/
-- **Windows Release (`striv.exe` + LSP v1.2.0):** https://github.com/GamingChelsea/Striv/releases/tag/v1.2.0
+- **Windows Release (`striv.exe` + LSP v1.5.3):** https://github.com/GamingChelsea/Striv/releases/tag/v1.5.3
 
 ---
 
@@ -50,7 +50,7 @@ striv build src/main.strv
 
 Der Language Server (`lang-lsp`) ist direkt in `striv.exe` (`striv lsp`) integriert. Für Syntax-Highlighting, Diagnostics, Hover, Autocomplete und Formatierung in VS Code:
 
-1. Lade im [GitHub Release v1.0.0](https://github.com/GamingChelsea/Striv/releases/tag/v1.0.0) sowohl **`striv.exe`** als auch **`striv-vscode-ext.zip`** herunter.
+1. Lade im [GitHub Release v1.5.3](https://github.com/GamingChelsea/Striv/releases/tag/v1.5.3) sowohl **`striv.exe`** als auch **`striv-vscode-ext.zip`** herunter.
 2. Lege `striv.exe` in einen Ordner, der im System-`PATH` liegt (damit VS Code `striv lsp` starten kann).
 3. Entpacke `striv-vscode-ext.zip` in deinen VS-Code-Extensions-Ordner:
    - Windows: `%USERPROFILE%\.vscode\extensions\striv-lang\`

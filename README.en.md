@@ -6,7 +6,7 @@
 **Striv** is a statically compiled systems programming language featuring a **2-ms Cranelift JIT** for rapid iteration and a **Rust/LLVM release transpiler** for optimized executables. It supports both **Rust syntax** (`syntax = "rust"`) and **Odin syntax** (`syntax = "odin"`) via `striv.toml`.
 
 - **Documentation (GitHub Pages):** https://gamingchelsea.github.io/Striv/
-- **Windows Release (`striv.exe` + LSP v1.2.0):** https://github.com/GamingChelsea/Striv/releases/tag/v1.2.0
+- **Windows Release (`striv.exe` + LSP v1.5.3):** https://github.com/GamingChelsea/Striv/releases/tag/v1.5.3
 
 ---
 
@@ -18,7 +18,7 @@
   - `--allman` (Allman): Opening `{` on a new line.
 - **2-ms Cranelift JIT & LLVM Release**: `striv run`, `striv dev` (hot-reload + live tweak server on port `:4040`), and `striv test` compile to native x86_64 in milliseconds. `striv build` transpiles to Rust and builds a standalone release executable.
 - **Smart Auto-Move / Auto-Clone & Null-Handles**: Last-use analysis automatically moves containers (`0 ns`) or clones them when read later — no `.clone()` needed. External handles default to `0` (`null`) with `.is_valid()`.
-- **Space-ECS 2.0**: Native multi-core Sparse-Set ECS (`Ecs::new()`, `spawn()`, `set()`, `set_parent()`, `detach()`, `parent_of()`, `has()`, `remove_comp()`, cascade `remove_entity()`, `query (id: entity, mut c: Comp, !Tag)`).
+- **StrivEcs 4.0**: Hybrid Archetype + Sparse-Set ECS (`Ecs::new()`, `mark_sparse()`, `spawn()`, `set()`, `add_rel()`, `remove_rel()`, `has_rel()`, `rel_target()`, `was_added()`, `was_removed()`, `archetype_count()`, `entity_count()`, `query (id: entity, mut c: Comp, !Tag)`).
 - **Sandboxed Mod Loader (`Mods::load("mods")`)**: Loads `mods/*/mod.strv` (or `mod.dll` / `libmod.so`), merges `api.strv`, jails `fs::read_text` / `fs::write_text` to each mod folder, and isolates panics/infinite loops via 500k gas limits.
 - **Package Manager (`striv add` / `striv remove`)**: Install crates from crates.io (with auto `striv sync`) or pure Striv packages from GitHub (`git:user/repo` into `.striv/pkgs/`).
 - **Direct C-FFI & Rust Interop**: `foreign "msvcrt.dll" { ... }` / `extern "msvcrt.dll" fn ...` with automatic `cstr` null-termination, plus `striv sync` and `rust fn` / `rust proc`.
@@ -48,6 +48,6 @@ striv switch-syntax odin src/main.strv --kr
 
 ## Editor Support (VS Code & Zed LSP)
 
-1. Download `striv.exe` from [GitHub Releases](https://github.com/GamingChelsea/Striv/releases/tag/v1.2.0) and place it on your system `PATH`.
+1. Download `striv.exe` from [GitHub Releases](https://github.com/GamingChelsea/Striv/releases/tag/v1.5.3) and place it on your system `PATH`.
 2. **VS Code**: Download `striv-vscode-ext.zip`, extract it, or run `code --install-extension ...`.
 3. **Zed**: Download `striv-zed-ext.zip`, extract it, and load it via **Extensions → Install Dev Extension** in Zed.

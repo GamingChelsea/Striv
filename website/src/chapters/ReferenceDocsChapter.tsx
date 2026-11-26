@@ -197,8 +197,8 @@ lock c { print("{c.hits}") }`,
     category: 'keyword',
     signature: '[parallel] query (id: entity, [mut] c: Comp, !Tag) in ecs { ... }',
     summary: {
-      en: 'Iterates over all entities matching the component pools in StrivEcs, optionally binding entity IDs (id: entity) and excluding components (!Tag).',
-      de: 'Iteriert über alle Entities in StrivEcs, die die Komponenten besitzen – optional mit Entity-ID (id: entity) und Ausschlussfilter (!Tag).',
+      en: 'Iterates over all entities matching the component pools in StrivEcs 4.0 (Hybrid Archetype + Sparse-Set), optionally binding entity IDs (id: entity) and excluding components (!Tag).',
+      de: 'Iteriert über alle Entities in StrivEcs 4.0 (Hybrid Archetype + Sparse-Set), die die Komponenten besitzen – optional mit Entity-ID (id: entity) und Ausschlussfilter (!Tag).',
     },
     rustCode: `query (id: entity, mut orb: Orbit, !Docked) in ecs {
     orb.alt += 50.0

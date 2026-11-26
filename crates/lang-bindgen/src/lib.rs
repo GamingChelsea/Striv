@@ -31,7 +31,7 @@ pub fn sync_project_dynamic(
 
     // Hash dependencies + bindgen version
     let mut hash: u64 = 0xcbf29ce484222325;
-    for b in content.as_bytes().iter().chain(b"striv-bindgen-2.0-v5") {
+    for b in content.as_bytes().iter().chain(b"striv-bindgen-2.0-v6") {
         hash ^= *b as u64;
         hash = hash.wrapping_mul(0x100000001b3);
     }
