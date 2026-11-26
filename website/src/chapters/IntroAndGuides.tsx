@@ -218,6 +218,31 @@ braces = "kr"
         ]}
       />
 
+      <DocH2 id="pkg-add" theme={theme}>
+        {tr(lang, 'Package Manager (striv add & remove)', 'Paketmanager (striv add & remove)')}
+      </DocH2>
+      <DocP theme={theme}>
+        {tr(
+          lang,
+          'Install Rust crates from crates.io (auto-syncing bindings) or pure Striv packages from GitHub into .striv/pkgs/. Import local subfolders or packages via use physics::orbit (Rust) or import "physics/orbit" (Odin).',
+          'Installiere Rust-Crates von crates.io (inkl. automatischem Sync) oder reine Striv-Pakete von GitHub nach .striv/pkgs/. Lokale Unterordner und Pakete bindest du per use physics::orbit (Rust) oder import "physics/orbit" (Odin) ein.',
+        )}
+      </DocP>
+      <CodeBlock
+        lang="bash"
+        theme={theme}
+        filename="terminal"
+        code={`# Add Rust crate from crates.io & auto-sync
+striv add glam
+striv add wgpu -F wgsl
+
+# Add pure Striv package from GitHub
+striv add git:user/orbital-math
+
+# Remove package
+striv remove glam`}
+      />
+
       <DocH2 id="fmt-lsp" theme={theme}>
         fmt, switch-syntax &amp; lsp
       </DocH2>

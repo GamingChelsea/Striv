@@ -373,6 +373,8 @@ pub enum Token {
     Underscore,
     #[token("use")]
     Use,
+    #[token("import")]
+    Import,
     #[token("tweak")]
     Tweak,
     #[token("struct")]
@@ -557,6 +559,7 @@ impl Token {
             Token::Underscore => "`_`".to_string(),
             Token::FatArrow => "`=>`".to_string(),
             Token::Use => "`use`".to_string(),
+            Token::Import => "`import`".to_string(),
             Token::Tweak => "`tweak`".to_string(),
             Token::Let => "`let`".to_string(),
             Token::Mut => "`mut`".to_string(),
@@ -734,7 +737,8 @@ impl Parser {
                     let Some(Token::Ident(mod_name)) = self.next() else {
                         self.error("Expected module name after `use` (e.g. `use player`)");
                     };
-                    if self.peek() == Some(&Token::ColonColon) {
+                    let mut mod_path = mod_name;
+                    while self.peek() == Some(&Token::ColonColon) {
                         self.next(); // `::`
                         if self.peek() == Some(&Token::LBrace) {
                             self.next(); // `{`
@@ -742,11 +746,26 @@ impl Parser {
                                 self.next();
                             }
                             self.expect(Token::RBrace);
+                            break;
+                        } else if let Some(Token::Ident(seg)) = self.peek().cloned() {
+                            self.next();
+                            mod_path.push('/');
+                            mod_path.push_str(&seg);
                         } else {
-                            self.next(); // single symbol like `Player`
+                            self.error("Expected segment after `::` in `use`");
                         }
                     }
-                    imports.push(mod_name);
+                    imports.push(mod_path);
+                }
+                Token::Import => {
+                    self.next(); // consume `import`
+                    match self.next() {
+                        Some(Token::Str(s)) => imports.push(s.replace("::", "/")),
+                        Some(Token::Ident(id)) => imports.push(id),
+                        _ => self.error(
+                            "Expected path string after `import` (e.g. `import \"physics/orbit\"`)",
+                        ),
+                    }
                 }
                 Token::Tweak => {
                     self.next(); // consume `tweak`
@@ -2484,6 +2503,65 @@ fn expr_reads_var(expr: &Expr, target: &str) -> bool {
     }
 }
 
+fn find_project_root(start: &std::path::Path) -> Option<std::path::PathBuf> {
+    let mut dir = if start.is_dir() {
+        Some(start)
+    } else {
+        start.parent()
+    };
+    while let Some(d) = dir {
+        if d.join("striv.toml").exists() {
+            return Some(d.to_path_buf());
+        }
+        dir = d.parent();
+    }
+    None
+}
+
+pub fn resolve_import_path(
+    current_dir: &std::path::Path,
+    imp: &str,
+) -> Result<std::path::PathBuf, String> {
+    let rel = imp.trim_end_matches(".strv").replace("::", "/");
+    let mut candidates = vec![
+        current_dir.join(format!("{}.strv", rel)),
+        current_dir.join(&rel).join("mod.strv"),
+        current_dir.join(&rel).join("lib.strv"),
+    ];
+
+    if let Some(root) = find_project_root(current_dir) {
+        candidates.push(root.join("src").join(format!("{}.strv", rel)));
+        candidates.push(root.join("src").join(&rel).join("mod.strv"));
+
+        let mut parts = rel.splitn(2, '/');
+        let pkg = parts.next().unwrap_or(&rel);
+        let pkg_hyphen = pkg.replace('_', "-");
+        for folder in [pkg, pkg_hyphen.as_str()] {
+            let pkg_dir = root.join(".striv").join("pkgs").join(folder);
+            if let Some(sub) = parts.next() {
+                candidates.push(pkg_dir.join("src").join(format!("{}.strv", sub)));
+                candidates.push(pkg_dir.join(format!("{}.strv", sub)));
+            } else {
+                candidates.push(pkg_dir.join("src").join("lib.strv"));
+                candidates.push(pkg_dir.join("src").join("main.strv"));
+                candidates.push(pkg_dir.join("lib.strv"));
+                candidates.push(pkg_dir.join("mod.strv"));
+            }
+        }
+    }
+
+    for c in candidates {
+        if c.exists() {
+            return Ok(c);
+        }
+    }
+    Err(format!(
+        "Modul '{}' konnte nicht gefunden werden (gesucht ab '{}')",
+        imp,
+        current_dir.display()
+    ))
+}
+
 pub fn load_program_with_imports(entry_path: &std::path::Path) -> Result<Program, String> {
     let mut visited = std::collections::HashSet::new();
     let mut combined = Program {
@@ -2534,9 +2612,13 @@ fn load_recursive(
         .unwrap_or("strv");
 
     for imp in &prog.imports {
-        let dep_path = dir.join(format!("{}.{}", imp, ext));
-        if dep_path.exists() {
+        if let Ok(dep_path) = resolve_import_path(dir, imp) {
             load_recursive(&dep_path, visited, out)?;
+        } else {
+            let dep_path = dir.join(format!("{}.{}", imp, ext));
+            if dep_path.exists() {
+                load_recursive(&dep_path, visited, out)?;
+            }
         }
     }
 
@@ -2831,5 +2913,51 @@ main :: proc() {
 "#;
         let good_prog = Parser::new_with_dialect(good_odin, Dialect::Odin).parse_program();
         assert!(check_container_nulls(&good_prog).is_ok());
+    }
+
+    #[test]
+    fn test_nested_and_package_imports() {
+        let tmp = std::env::temp_dir().join("striv_test_nested_imports");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(tmp.join("src").join("physics")).unwrap();
+        std::fs::create_dir_all(tmp.join(".striv").join("pkgs").join("kepler").join("src")).unwrap();
+
+        std::fs::write(
+            tmp.join("striv.toml"),
+            "[package]\nname = \"space\"\nsyntax = \"odin\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            tmp.join("src").join("physics").join("orbit.strv"),
+            "orbit_step :: proc() -> int { return 42 }\n",
+        )
+        .unwrap();
+        std::fs::write(
+            tmp.join(".striv").join("pkgs").join("kepler").join("src").join("lib.strv"),
+            "kepler_const :: proc() -> int { return 7 }\n",
+        )
+        .unwrap();
+
+        let main_odin = tmp.join("src").join("main_odin.strv");
+        std::fs::write(
+            &main_odin,
+            "import \"physics/orbit\"\nimport \"kepler\"\nmain :: proc() -> int { return orbit_step() + kepler_const() }\n",
+        )
+        .unwrap();
+        let prog_odin = load_program_with_imports(&main_odin).unwrap();
+        assert!(prog_odin.functions.iter().any(|f| f.name == "orbit_step"));
+        assert!(prog_odin.functions.iter().any(|f| f.name == "kepler_const"));
+
+        let main_rust = tmp.join("src").join("main_rust.strv");
+        std::fs::write(
+            &main_rust,
+            "use physics::orbit\nuse kepler\nfn main() -> int { return 0 }\n",
+        )
+        .unwrap();
+        let prog_rust = load_program_with_imports(&main_rust).unwrap();
+        assert!(prog_rust.functions.iter().any(|f| f.name == "orbit_step"));
+        assert!(prog_rust.functions.iter().any(|f| f.name == "kepler_const"));
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

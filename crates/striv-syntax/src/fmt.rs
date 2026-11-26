@@ -100,7 +100,11 @@ pub fn format_program_with_options(
     let mut out = String::new();
 
     for imp in &prog.imports {
-        out.push_str(&format!("use {}\n", imp));
+        if FMT_DIALECT.with(|d| d.get()) == crate::Dialect::Odin {
+            out.push_str(&format!("import \"{}\"\n", imp));
+        } else {
+            out.push_str(&format!("use {}\n", imp.replace('/', "::")));
+        }
     }
     if !prog.imports.is_empty() {
         out.push('\n');
