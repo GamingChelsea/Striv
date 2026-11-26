@@ -797,10 +797,37 @@ pub extern "C" fn striv_str_to_float(s: *const String) -> f64 {
     unsafe { (*s).trim().parse::<f64>().unwrap_or(0.0) }
 }
 
+std::thread_local! {
+    static ACTIVE_MOD_DIR: std::cell::RefCell<Option<std::path::PathBuf>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+pub fn set_active_mod_dir(dir: Option<&std::path::Path>) {
+    ACTIVE_MOD_DIR.with(|cell| {
+        *cell.borrow_mut() = dir.map(|d| d.to_path_buf());
+    });
+}
+
+fn resolve_mod_path(raw: &str) -> Option<std::path::PathBuf> {
+    ACTIVE_MOD_DIR.with(|cell| {
+        let guard = cell.borrow();
+        if let Some(mod_dir) = guard.as_ref() {
+            if raw.contains("..") || raw.contains(':') || raw.starts_with('/') || raw.starts_with('\\') {
+                return None;
+            }
+            Some(mod_dir.join(raw))
+        } else {
+            Some(std::path::PathBuf::from(raw))
+        }
+    })
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn striv_fs_read_text(path: *const String) -> *mut String {
     let p = unsafe { &*path };
-    let content = std::fs::read_to_string(p).unwrap_or_default();
+    let content = resolve_mod_path(p)
+        .and_then(|rp| std::fs::read_to_string(rp).ok())
+        .unwrap_or_default();
     Box::into_raw(Box::new(content))
 }
 
@@ -808,12 +835,15 @@ pub extern "C" fn striv_fs_read_text(path: *const String) -> *mut String {
 pub extern "C" fn striv_fs_write_text(path: *const String, data: *const String) -> i64 {
     let p = unsafe { &*path };
     let d = unsafe { &*data };
-    if let Some(parent) = std::path::Path::new(p).parent() {
+    let Some(rp) = resolve_mod_path(p) else {
+        return 0;
+    };
+    if let Some(parent) = rp.parent() {
         if !parent.as_os_str().is_empty() {
             let _ = std::fs::create_dir_all(parent);
         }
     }
-    std::fs::write(p, d).is_ok() as i64
+    std::fs::write(rp, d).is_ok() as i64
 }
 
 #[unsafe(no_mangle)]

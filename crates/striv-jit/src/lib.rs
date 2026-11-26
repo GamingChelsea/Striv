@@ -184,6 +184,10 @@ struct CompileEnv<'a> {
     ecs_query_run_ref: cranelift::codegen::ir::FuncRef,
     ecs_has_ref: cranelift::codegen::ir::FuncRef,
     ecs_remove_comp_ref: cranelift::codegen::ir::FuncRef,
+    mods_load_ref: cranelift::codegen::ir::FuncRef,
+    mods_count_ref: cranelift::codegen::ir::FuncRef,
+    mods_init_ref: cranelift::codegen::ir::FuncRef,
+    mods_tick_ref: cranelift::codegen::ir::FuncRef,
     to_json_ref: cranelift::codegen::ir::FuncRef,
     from_json_ref: cranelift::codegen::ir::FuncRef,
     json_schemas: &'a HashMap<String, (usize, usize)>,
@@ -399,6 +403,11 @@ impl JitCompiler {
         builder.symbol("striv_bytes_clone", lang_runtime::striv_bytes_clone as *const u8);
         builder.symbol("striv_vec_clone", lang_runtime::striv_vec_clone as *const u8);
         builder.symbol("striv_svec_clone", lang_runtime::striv_svec_clone as *const u8);
+        builder.symbol("striv_std_Mods__load", striv_mods_load as *const u8);
+        builder.symbol("striv_mods_count", striv_mods_count as *const u8);
+        builder.symbol("striv_mods_init", striv_mods_init as *const u8);
+        builder.symbol("striv_mods_tick", striv_mods_tick as *const u8);
+        builder.symbol("striv_mods_free", striv_mods_free as *const u8);
         builder.symbol_lookup_fn(Box::new(|name| {
             EXTERN_C_SYMS
                 .get()?
@@ -790,6 +799,34 @@ impl JitCompiler {
         let ecs_remove_comp_id = self
             .module
             .declare_function("striv_ecs_remove_comp", Linkage::Import, &sig_3i_i)
+            .unwrap();
+        let mut sig_1i_i = self.module.make_signature();
+        sig_1i_i.params.push(AbiParam::new(int_ty));
+        sig_1i_i.returns.push(AbiParam::new(int_ty));
+        let mods_load_id = self
+            .module
+            .declare_function("striv_std_Mods__load", Linkage::Import, &sig_1i_i)
+            .unwrap();
+        let mods_count_id = self
+            .module
+            .declare_function("striv_mods_count", Linkage::Import, &sig_1i_i)
+            .unwrap();
+        let mut sig_2i_i = self.module.make_signature();
+        sig_2i_i.params.push(AbiParam::new(int_ty));
+        sig_2i_i.params.push(AbiParam::new(int_ty));
+        sig_2i_i.returns.push(AbiParam::new(int_ty));
+        let mods_init_id = self
+            .module
+            .declare_function("striv_mods_init", Linkage::Import, &sig_2i_i)
+            .unwrap();
+        let mut sig_2if_i = self.module.make_signature();
+        sig_2if_i.params.push(AbiParam::new(int_ty));
+        sig_2if_i.params.push(AbiParam::new(int_ty));
+        sig_2if_i.params.push(AbiParam::new(types::F64));
+        sig_2if_i.returns.push(AbiParam::new(int_ty));
+        let mods_tick_id = self
+            .module
+            .declare_function("striv_mods_tick", Linkage::Import, &sig_2if_i)
             .unwrap();
         let to_json_id = self
             .module
@@ -1201,6 +1238,10 @@ impl JitCompiler {
                     ecs_remove_comp_ref: self
                         .module
                         .declare_func_in_func(ecs_remove_comp_id, builder.func),
+                    mods_load_ref: self.module.declare_func_in_func(mods_load_id, builder.func),
+                    mods_count_ref: self.module.declare_func_in_func(mods_count_id, builder.func),
+                    mods_init_ref: self.module.declare_func_in_func(mods_init_id, builder.func),
+                    mods_tick_ref: self.module.declare_func_in_func(mods_tick_id, builder.func),
                     to_json_ref: self.module.declare_func_in_func(to_json_id, builder.func),
                     from_json_ref: self.module.declare_func_in_func(from_json_id, builder.func),
                     json_schemas: &json_schemas,
@@ -1696,6 +1737,12 @@ fn compile_call(
         return base;
     }
 
+    if (name == "Mods__load" || name == "Mods::load") && args.len() == 1 {
+        let dir_ptr = compile_expr(&args[0], builder, vars, env);
+        let c = builder.ins().call(env.mods_load_ref, &[dir_ptr]);
+        return builder.inst_results(c)[0];
+    }
+
     let (func_ref, param_meta) = env
         .funcs
         .get(name)
@@ -1828,6 +1875,36 @@ fn compile_method_call(
     vars: &HashMap<String, VarInfo>,
     env: &mut CompileEnv,
 ) -> Value {
+    if matches!(method, "count" | "init" | "tick") {
+        if let Some(VarInfo::Handle {
+            var: mods_var,
+            type_name,
+            ..
+        }) = vars.get(receiver)
+        {
+            if type_name == "Mods" {
+                let mods_ptr = builder.use_var(*mods_var);
+                return match method {
+                    "count" => {
+                        let c = builder.ins().call(env.mods_count_ref, &[mods_ptr]);
+                        builder.inst_results(c)[0]
+                    }
+                    "init" => {
+                        let ecs_ptr = compile_expr(&args[0], builder, vars, env);
+                        let c = builder.ins().call(env.mods_init_ref, &[mods_ptr, ecs_ptr]);
+                        builder.inst_results(c)[0]
+                    }
+                    "tick" => {
+                        let ecs_ptr = compile_expr(&args[0], builder, vars, env);
+                        let dt = to_f64(compile_expr(&args[1], builder, vars, env), builder);
+                        let c = builder.ins().call(env.mods_tick_ref, &[mods_ptr, ecs_ptr, dt]);
+                        builder.inst_results(c)[0]
+                    }
+                    _ => unreachable!(),
+                };
+            }
+        }
+    }
     if (method == "has" || method == "remove_comp") && args.len() == 2 {
         let ecs_var_opt = match vars.get(receiver) {
             Some(VarInfo::Handle {
@@ -4826,6 +4903,237 @@ pub fn eval_comptime_consts(prog: &Program) -> HashMap<String, i64> {
     const_vals
 }
 
+struct LoadedMod {
+    name: String,
+    mod_dir: std::path::PathBuf,
+    active: bool,
+    _jit: Option<JitCompiler>,
+    _dll: Option<libloading::Library>,
+    init_fn: Option<extern "C" fn(*mut lang_runtime::ecs::StrivEcs) -> i64>,
+    tick_fn: Option<extern "C" fn(*mut lang_runtime::ecs::StrivEcs, f64) -> i64>,
+}
+
+pub struct StrivMods {
+    mods: Vec<LoadedMod>,
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_mods_load(dir_ptr: *const String) -> *mut StrivMods {
+    let dir_str = unsafe { &*dir_ptr };
+    let root = std::path::PathBuf::from(dir_str);
+    let mut loaded = Vec::new();
+
+    // Optional api.strv sharing
+    let api_candidates = [
+        root.parent().map(|p| p.join("api.strv")),
+        root.parent().map(|p| p.join("src").join("api.strv")),
+        Some(std::path::PathBuf::from("api.strv")),
+        Some(std::path::PathBuf::from("src/api.strv")),
+    ];
+    let api_prog = api_candidates.into_iter().flatten().find_map(|p| {
+        if p.exists() {
+            let src = std::fs::read_to_string(&p).ok()?;
+            let dialect = if src.contains(":: struct") || src.contains(":: proc") || src.contains(":: open enum") {
+                striv_syntax::Dialect::Odin
+            } else {
+                striv_syntax::Dialect::Rust
+            };
+            Some(striv_syntax::Parser::new_with_dialect(&src, dialect).parse_program())
+        } else {
+            None
+        }
+    });
+
+    if let Ok(entries) = std::fs::read_dir(&root) {
+        let mut dirs: Vec<std::path::PathBuf> = entries
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.is_dir())
+            .collect();
+        dirs.sort();
+
+        for mod_dir in dirs {
+            let mod_name = mod_dir
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("unknown")
+                .to_string();
+            let strv_path = mod_dir.join("mod.strv");
+            if strv_path.exists() {
+                if let Ok(src) = std::fs::read_to_string(&strv_path) {
+                    let dialect = if src.contains(":: struct")
+                        || src.contains(":: proc")
+                        || src.contains(":: open enum")
+                        || src.contains(":=")
+                    {
+                        striv_syntax::Dialect::Odin
+                    } else {
+                        striv_syntax::Dialect::Rust
+                    };
+                    let mut prog =
+                        striv_syntax::Parser::new_with_dialect(&src, dialect).parse_program();
+                    if let Some(api) = &api_prog {
+                        for s in &api.structs {
+                            if !prog.structs.iter().any(|ps| ps.name == s.name) {
+                                prog.structs.push(s.clone());
+                            }
+                        }
+                        for e in &api.enums {
+                            prog.enums.push(e.clone());
+                        }
+                        for u in &api.units {
+                            if !prog.units.iter().any(|pu| pu.name == u.name) {
+                                prog.units.push(u.clone());
+                            }
+                        }
+                    }
+                    let _ = striv_syntax::units::check_and_erase_units(&mut prog);
+                    striv_syntax::merge_open_enums(&mut prog);
+                    striv_syntax::expand_rpc_functions(&mut prog);
+                    striv_syntax::monomorphize::monomorphize_program(&mut prog);
+
+                    let mut jit = JitCompiler::new_sandboxed();
+                    jit.compile_program(&prog);
+                    let init_fn = jit.module.get_name("mod_init").and_then(|fid| {
+                        if let cranelift_module::FuncOrDataId::Func(id) = fid {
+                            let ptr = jit.module.get_finalized_function(id);
+                            Some(unsafe {
+                                std::mem::transmute::<
+                                    *const u8,
+                                    extern "C" fn(*mut lang_runtime::ecs::StrivEcs) -> i64,
+                                >(ptr)
+                            })
+                        } else {
+                            None
+                        }
+                    });
+                    let tick_fn = jit.module.get_name("mod_tick").and_then(|fid| {
+                        if let cranelift_module::FuncOrDataId::Func(id) = fid {
+                            let ptr = jit.module.get_finalized_function(id);
+                            Some(unsafe {
+                                std::mem::transmute::<
+                                    *const u8,
+                                    extern "C" fn(*mut lang_runtime::ecs::StrivEcs, f64) -> i64,
+                                >(ptr)
+                            })
+                        } else {
+                            None
+                        }
+                    });
+                    loaded.push(LoadedMod {
+                        name: mod_name,
+                        mod_dir,
+                        active: true,
+                        _jit: Some(jit),
+                        _dll: None,
+                        init_fn,
+                        tick_fn,
+                    });
+                }
+            } else {
+                let dll_path = if cfg!(windows) {
+                    mod_dir.join("mod.dll")
+                } else {
+                    mod_dir.join("libmod.so")
+                };
+                if dll_path.exists() {
+                    if let Ok(lib) = unsafe { libloading::Library::new(&dll_path) } {
+                        let init_fn = unsafe {
+                            lib.get::<extern "C" fn(*mut lang_runtime::ecs::StrivEcs) -> i64>(
+                                b"mod_init",
+                            )
+                            .ok()
+                            .map(|s| *s)
+                        };
+                        let tick_fn = unsafe {
+                            lib.get::<extern "C" fn(*mut lang_runtime::ecs::StrivEcs, f64) -> i64>(
+                                b"mod_tick",
+                            )
+                            .ok()
+                            .map(|s| *s)
+                        };
+                        loaded.push(LoadedMod {
+                            name: mod_name,
+                            mod_dir,
+                            active: true,
+                            _jit: None,
+                            _dll: Some(lib),
+                            init_fn,
+                            tick_fn,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    Box::into_raw(Box::new(StrivMods { mods: loaded }))
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_mods_count(mods: *const StrivMods) -> i64 {
+    if mods.is_null() {
+        return 0;
+    }
+    let m = unsafe { &*mods };
+    m.mods.iter().filter(|x| x.active).count() as i64
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_mods_init(
+    mods: *mut StrivMods,
+    ecs: *mut lang_runtime::ecs::StrivEcs,
+) -> i64 {
+    let m_list = unsafe { &mut *mods };
+    for m in &mut m_list.mods {
+        if !m.active {
+            continue;
+        }
+        if let Some(f) = m.init_fn {
+            lang_runtime::set_sandbox_gas(500_000);
+            lang_runtime::set_active_mod_dir(Some(&m.mod_dir));
+            let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(ecs)));
+            lang_runtime::set_active_mod_dir(None);
+            if res.is_err() || lang_runtime::take_sandbox_aborted() {
+                m.active = false;
+                eprintln!("[Striv Mods] Mod '{}' in mod_init deaktiviert (Gas-Limit oder Panic).", m.name);
+            }
+        }
+    }
+    0
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_mods_tick(
+    mods: *mut StrivMods,
+    ecs: *mut lang_runtime::ecs::StrivEcs,
+    dt: f64,
+) -> i64 {
+    let m_list = unsafe { &mut *mods };
+    for m in &mut m_list.mods {
+        if !m.active {
+            continue;
+        }
+        if let Some(f) = m.tick_fn {
+            lang_runtime::set_sandbox_gas(500_000);
+            lang_runtime::set_active_mod_dir(Some(&m.mod_dir));
+            let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(ecs, dt)));
+            lang_runtime::set_active_mod_dir(None);
+            if res.is_err() || lang_runtime::take_sandbox_aborted() {
+                m.active = false;
+                eprintln!("[Striv Mods] Mod '{}' in mod_tick deaktiviert (Gas-Limit oder Panic).", m.name);
+            }
+        }
+    }
+    0
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_mods_free(mods: *mut StrivMods) {
+    if !mods.is_null() {
+        unsafe { drop(Box::from_raw(mods)) };
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5339,5 +5647,83 @@ main :: proc() -> int {
         let ptr = jit.compile_program(&prog);
         let f: fn() -> i64 = unsafe { std::mem::transmute(ptr) };
         assert_eq!(f(), 1);
+    }
+
+    #[test]
+    fn test_mods_load_and_fault_isolation() {
+        let tmp = std::env::temp_dir().join("striv_test_mods_e2e");
+        let _ = std::fs::remove_dir_all(&tmp);
+        let mods_dir = tmp.join("mods");
+        std::fs::create_dir_all(mods_dir.join("good_solar")).unwrap();
+        std::fs::create_dir_all(mods_dir.join("broken_loop")).unwrap();
+
+        std::fs::write(
+            tmp.join("api.strv"),
+            "Orbit :: struct { alt: float = 0.0 }\n",
+        )
+        .unwrap();
+
+        std::fs::write(
+            mods_dir.join("good_solar").join("mod.strv"),
+            r#"
+SolarSail :: struct { power: float = 10.0 }
+
+mod_init :: proc(ecs: Ecs) -> int {
+    ship := ecs.spawn()
+    ecs.set(ship, Orbit { alt: 100.0 })
+    ecs.set(ship, SolarSail { power: 25.0 })
+    return 0
+}
+
+mod_tick :: proc(ecs: Ecs, dt: float) -> int {
+    query (mut orb: Orbit, sail: SolarSail) in ecs {
+        orb.alt += sail.power * dt
+    }
+    return 0
+}
+"#,
+        )
+        .unwrap();
+
+        std::fs::write(
+            mods_dir.join("broken_loop").join("mod.strv"),
+            r#"
+mod_tick :: proc(ecs: Ecs, dt: float) -> int {
+    while true {}
+    return 0
+}
+"#,
+        )
+        .unwrap();
+
+        let mods_path_str = mods_dir.to_string_lossy().replace('\\', "/");
+        let host_src = format!(
+            r#"
+Orbit :: struct {{ alt: float = 0.0 }}
+
+main :: proc() -> int {{
+    ecs := Ecs::new()
+    mods := Mods::load("{}")
+    assert(mods.count() == 2)
+    mods.init(ecs)
+    mods.tick(ecs, 1.0)
+    assert(mods.count() == 1)
+    mods.tick(ecs, 1.0)
+    query (orb: Orbit) in ecs {{
+        assert(orb.alt > 149.0)
+    }}
+    return mods.count()
+}}
+"#,
+            mods_path_str
+        );
+
+        let prog = striv_syntax::Parser::new_with_dialect(&host_src, striv_syntax::Dialect::Odin)
+            .parse_program();
+        let mut jit = JitCompiler::new();
+        let ptr = jit.compile_program(&prog);
+        let f: fn() -> i64 = unsafe { std::mem::transmute(ptr) };
+        assert_eq!(f(), 1);
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

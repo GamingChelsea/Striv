@@ -386,6 +386,24 @@ impl LanguageServer for StrivLsp {
                 });
                 return Ok(Some(CompletionResponse::Array(items)));
             }
+            if visible.iter().any(|(n, ty)| n == &var_name && ty == "Mods") {
+                for (m, snip, det) in [
+                    ("count", "count()", "fn count() -> int"),
+                    ("init", "init(${1:ecs})", "fn init(ecs: Ecs)"),
+                    ("tick", "tick(${1:ecs}, ${2:dt})", "fn tick(ecs: Ecs, dt: float)"),
+                ] {
+                    items.push(CompletionItem {
+                        label: m.to_string(),
+                        kind: Some(CompletionItemKind::METHOD),
+                        insert_text: Some(snip.to_string()),
+                        insert_text_format: Some(InsertTextFormat::SNIPPET),
+                        detail: Some(det.to_string()),
+                        sort_text: Some(format!("0_{}", m)),
+                        ..Default::default()
+                    });
+                }
+                return Ok(Some(CompletionResponse::Array(items)));
+            }
             if visible.iter().any(|(n, ty)| n == &var_name && ty == "Ecs") {
                 for (m, snip, det) in [
                     ("spawn", "spawn()", "fn spawn() -> int"),
@@ -422,6 +440,24 @@ impl LanguageServer for StrivLsp {
                     ("read_u32", "read_u32(${1:offset})", "fn read_u32(offset: int) -> int"),
                     ("read_i64", "read_i64(${1:offset})", "fn read_i64(offset: int) -> int"),
                     ("read_f64", "read_f64(${1:offset})", "fn read_f64(offset: int) -> float"),
+                ] {
+                    items.push(CompletionItem {
+                        label: m.to_string(),
+                        kind: Some(CompletionItemKind::METHOD),
+                        insert_text: Some(snip.to_string()),
+                        insert_text_format: Some(InsertTextFormat::SNIPPET),
+                        detail: Some(det.to_string()),
+                        sort_text: Some(format!("0_{}", m)),
+                        ..Default::default()
+                    });
+                }
+                return Ok(Some(CompletionResponse::Array(items)));
+            }
+            if visible.iter().any(|(n, ty)| n == &var_name && ty == "Mods") {
+                for (m, snip, det) in [
+                    ("count", "count()", "fn count() -> int"),
+                    ("init", "init(${1:ecs})", "fn init(ecs: Ecs)"),
+                    ("tick", "tick(${1:ecs}, ${2:dt})", "fn tick(ecs: Ecs, dt: float)"),
                 ] {
                     items.push(CompletionItem {
                         label: m.to_string(),
@@ -488,6 +524,24 @@ impl LanguageServer for StrivLsp {
                         kind: Some(CompletionItemKind::FIELD),
                         detail: Some(format!("color .{}", idx)),
                         sort_text: Some(format!("2_{}_{}", i, swiz)),
+                        ..Default::default()
+                    });
+                }
+                return Ok(Some(CompletionResponse::Array(items)));
+            }
+            if visible.iter().any(|(n, ty)| n == &var_name && ty == "Mods") {
+                for (m, snip, det) in [
+                    ("count", "count()", "fn count() -> int"),
+                    ("init", "init(${1:ecs})", "fn init(ecs: Ecs)"),
+                    ("tick", "tick(${1:ecs}, ${2:dt})", "fn tick(ecs: Ecs, dt: float)"),
+                ] {
+                    items.push(CompletionItem {
+                        label: m.to_string(),
+                        kind: Some(CompletionItemKind::METHOD),
+                        insert_text: Some(snip.to_string()),
+                        insert_text_format: Some(InsertTextFormat::SNIPPET),
+                        detail: Some(det.to_string()),
+                        sort_text: Some(format!("0_{}", m)),
                         ..Default::default()
                     });
                 }

@@ -67,6 +67,34 @@ mod_tick :: proc() -> int {
 }`}
       />
 
+      <DocH2 id="mods-loader" theme={theme}>
+        {tr(lang, 'Mod Loader (Mods::load) & Fault Isolation', 'Mod-Loader (Mods::load) & Fault-Isolation')}
+      </DocH2>
+      <DocP theme={theme}>
+        {tr(
+          lang,
+          'Mods::load("mods") loads all mods/*/mod.strv (or compiled mod.dll / libmod.so), automatically merges api.strv structs/enums/units, jails fs::read_text / fs::write_text to each mod folder, and isolates panics or infinite loops via gas limits (500,000) without crashing the host.',
+          'Mods::load("mods") lädt alle mods/*/mod.strv (oder kompilierte mod.dll / libmod.so), merged automatisch api.strv-Structs/Enums/Units, sperrt fs::read_text / fs::write_text strikt in den jeweiligen Mod-Ordner und isoliert Endlosschleifen/Panics per Gas-Limit (500.000), ohne das Hauptspiel abzustürzen.',
+        )}
+      </DocP>
+      <CodeBlock
+        dialect={dialect}
+        theme={theme}
+        filename="mods_host.strv"
+        code={`fn run_mods(mut ecs: Ecs) {
+    let mut mods = Mods::load("mods")
+    mods.init(ecs)
+    mods.tick(ecs, 0.016)
+    print("Active mods: {mods.count()}")
+}`}
+        odinCode={`run_mods :: proc(ecs: Ecs) {
+    mods := Mods::load("mods")
+    mods.init(ecs)
+    mods.tick(ecs, 0.016)
+    print("Active mods: {mods.count()}")
+}`}
+      />
+
       <DocH2 id="csharp-bindgen" theme={theme}>
         {tr(lang, 'C# Bindings (striv bindgen-cs)', 'C#-Bindings (striv bindgen-cs)')}
       </DocH2>
