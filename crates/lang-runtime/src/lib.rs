@@ -719,6 +719,279 @@ pub extern "C" fn striv_window_present(handle_bits: i64) -> i64 {
     present_host_window(handle_bits) as i64
 }
 
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_window_width(handle_bits: i64) -> i64 {
+    let handle = WinHandle::from(KeyData::from_ffi(handle_bits as u64));
+    WINDOWS.with(|w| w.borrow().get(handle).map_or(0, |hw| hw.width as i64))
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_window_height(handle_bits: i64) -> i64 {
+    let handle = WinHandle::from(KeyData::from_ffi(handle_bits as u64));
+    WINDOWS.with(|w| w.borrow().get(handle).map_or(0, |hw| hw.height as i64))
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_window_draw_circle(
+    handle_bits: i64,
+    cx: i64,
+    cy: i64,
+    r: i64,
+    rgb: i64,
+) -> i64 {
+    if r <= 0 {
+        return 0;
+    }
+    let handle = WinHandle::from(KeyData::from_ffi(handle_bits as u64));
+    WINDOWS.with(|w| {
+        if let Some(hw) = w.borrow_mut().get_mut(handle) {
+            let x0 = (cx - r).max(0) as usize;
+            let y0 = (cy - r).max(0) as usize;
+            let x1 = (cx + r + 1).clamp(0, hw.width as i64) as usize;
+            let y1 = (cy + r + 1).clamp(0, hw.height as i64) as usize;
+            let r2 = r * r;
+            let col = rgb as u32;
+            for py in y0..y1 {
+                let dy = py as i64 - cy;
+                let row = py * hw.width;
+                for px in x0..x1 {
+                    let dx = px as i64 - cx;
+                    if dx * dx + dy * dy <= r2 {
+                        hw.buffer[row + px] = col;
+                    }
+                }
+            }
+        }
+    });
+    0
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_window_draw_line(
+    handle_bits: i64,
+    x0: i64,
+    y0: i64,
+    x1: i64,
+    y1: i64,
+    rgb: i64,
+) -> i64 {
+    let handle = WinHandle::from(KeyData::from_ffi(handle_bits as u64));
+    WINDOWS.with(|w| {
+        if let Some(hw) = w.borrow_mut().get_mut(handle) {
+            let col = rgb as u32;
+            let mut x = x0;
+            let mut y = y0;
+            let dx = (x1 - x0).abs();
+            let sx = if x0 < x1 { 1 } else { -1 };
+            let dy = -(y1 - y0).abs();
+            let sy = if y0 < y1 { 1 } else { -1 };
+            let mut err = dx + dy;
+            let max_steps = (dx - dy + 2).min(8192);
+            for _ in 0..max_steps {
+                if x >= 0 && y >= 0 && (x as usize) < hw.width && (y as usize) < hw.height {
+                    hw.buffer[(y as usize) * hw.width + (x as usize)] = col;
+                }
+                if x == x1 && y == y1 {
+                    break;
+                }
+                let e2 = 2 * err;
+                if e2 >= dy {
+                    err += dy;
+                    x += sx;
+                }
+                if e2 <= dx {
+                    err += dx;
+                    y += sy;
+                }
+            }
+        }
+    });
+    0
+}
+
+fn glyph_5x7(ch: u8) -> [u8; 7] {
+    match ch.to_ascii_uppercase() {
+        b'A' => [0x0E, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11],
+        b'B' => [0x1E, 0x11, 0x11, 0x1E, 0x11, 0x11, 0x1E],
+        b'C' => [0x0E, 0x11, 0x10, 0x10, 0x10, 0x11, 0x0E],
+        b'D' => [0x1C, 0x12, 0x11, 0x11, 0x11, 0x12, 0x1C],
+        b'E' => [0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x1F],
+        b'F' => [0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x10],
+        b'G' => [0x0E, 0x11, 0x10, 0x17, 0x11, 0x11, 0x0F],
+        b'H' => [0x11, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11],
+        b'I' => [0x0E, 0x04, 0x04, 0x04, 0x04, 0x04, 0x0E],
+        b'J' => [0x07, 0x02, 0x02, 0x02, 0x02, 0x12, 0x0C],
+        b'K' => [0x11, 0x12, 0x14, 0x18, 0x14, 0x12, 0x11],
+        b'L' => [0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x1F],
+        b'M' => [0x11, 0x1B, 0x15, 0x15, 0x11, 0x11, 0x11],
+        b'N' => [0x11, 0x19, 0x15, 0x13, 0x11, 0x11, 0x11],
+        b'O' => [0x0E, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E],
+        b'P' => [0x1E, 0x11, 0x11, 0x1E, 0x10, 0x10, 0x10],
+        b'Q' => [0x0E, 0x11, 0x11, 0x11, 0x15, 0x12, 0x0D],
+        b'R' => [0x1E, 0x11, 0x11, 0x1E, 0x14, 0x12, 0x11],
+        b'S' => [0x0F, 0x10, 0x10, 0x0E, 0x01, 0x01, 0x1E],
+        b'T' => [0x1F, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04],
+        b'U' => [0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E],
+        b'V' => [0x11, 0x11, 0x11, 0x11, 0x11, 0x0A, 0x04],
+        b'W' => [0x11, 0x11, 0x11, 0x15, 0x15, 0x1B, 0x11],
+        b'X' => [0x11, 0x11, 0x0A, 0x04, 0x0A, 0x11, 0x11],
+        b'Y' => [0x11, 0x11, 0x0A, 0x04, 0x04, 0x04, 0x04],
+        b'Z' => [0x1F, 0x01, 0x02, 0x04, 0x08, 0x10, 0x1F],
+        b'0' => [0x0E, 0x11, 0x13, 0x15, 0x19, 0x11, 0x0E],
+        b'1' => [0x04, 0x0C, 0x04, 0x04, 0x04, 0x04, 0x0E],
+        b'2' => [0x0E, 0x11, 0x01, 0x06, 0x08, 0x10, 0x1F],
+        b'3' => [0x1F, 0x01, 0x02, 0x06, 0x01, 0x11, 0x0E],
+        b'4' => [0x02, 0x06, 0x0A, 0x12, 0x1F, 0x02, 0x02],
+        b'5' => [0x1F, 0x10, 0x1E, 0x01, 0x01, 0x11, 0x0E],
+        b'6' => [0x06, 0x08, 0x10, 0x1E, 0x11, 0x11, 0x0E],
+        b'7' => [0x1F, 0x01, 0x02, 0x04, 0x08, 0x08, 0x08],
+        b'8' => [0x0E, 0x11, 0x11, 0x0E, 0x11, 0x11, 0x0E],
+        b'9' => [0x0E, 0x11, 0x11, 0x0F, 0x01, 0x02, 0x0C],
+        b':' => [0x00, 0x0C, 0x0C, 0x00, 0x0C, 0x0C, 0x00],
+        b'.' => [0x00, 0x00, 0x00, 0x00, 0x00, 0x0C, 0x0C],
+        b',' => [0x00, 0x00, 0x00, 0x00, 0x0C, 0x04, 0x08],
+        b'-' => [0x00, 0x00, 0x00, 0x1F, 0x00, 0x00, 0x00],
+        b'+' => [0x00, 0x04, 0x04, 0x1F, 0x04, 0x04, 0x00],
+        b'/' => [0x01, 0x02, 0x02, 0x04, 0x08, 0x08, 0x10],
+        b'(' => [0x02, 0x04, 0x08, 0x08, 0x08, 0x04, 0x02],
+        b')' => [0x08, 0x04, 0x02, 0x02, 0x02, 0x04, 0x08],
+        b'[' => [0x0E, 0x08, 0x08, 0x08, 0x08, 0x08, 0x0E],
+        b']' => [0x0E, 0x02, 0x02, 0x02, 0x02, 0x02, 0x0E],
+        b'%' => [0x18, 0x19, 0x02, 0x04, 0x08, 0x13, 0x03],
+        b'=' => [0x00, 0x00, 0x1F, 0x00, 0x1F, 0x00, 0x00],
+        b'>' => [0x08, 0x04, 0x02, 0x01, 0x02, 0x04, 0x08],
+        b'<' => [0x02, 0x04, 0x08, 0x10, 0x08, 0x04, 0x02],
+        b'_' => [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1F],
+        _ => [0x00; 7],
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_window_draw_text(
+    handle_bits: i64,
+    x: i64,
+    y: i64,
+    text_ptr: *const String,
+    rgb: i64,
+    scale: i64,
+) -> i64 {
+    if text_ptr.is_null() {
+        return 0;
+    }
+    let text = unsafe { (*text_ptr).as_str() };
+    let sc = scale.max(1);
+    let col = rgb as u32;
+    let handle = WinHandle::from(KeyData::from_ffi(handle_bits as u64));
+    WINDOWS.with(|w| {
+        if let Some(hw) = w.borrow_mut().get_mut(handle) {
+            let mut cx = x;
+            for b in text.bytes() {
+                let rows = glyph_5x7(b);
+                for (ry, bits) in rows.iter().enumerate() {
+                    for rx in 0..5 {
+                        if (bits >> (4 - rx)) & 1 == 1 {
+                            for sy in 0..sc {
+                                for sx in 0..sc {
+                                    let px = cx + rx * sc + sx;
+                                    let py = y + (ry as i64) * sc + sy;
+                                    if px >= 0
+                                        && py >= 0
+                                        && (px as usize) < hw.width
+                                        && (py as usize) < hw.height
+                                    {
+                                        hw.buffer[(py as usize) * hw.width + (px as usize)] = col;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                cx += 6 * sc;
+            }
+        }
+    });
+    0
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_window_is_key_down(handle_bits: i64, key_code: i64) -> i64 {
+    let key = match key_code {
+        87 => Key::W,
+        83 => Key::S,
+        65 => Key::A,
+        68 => Key::D,
+        81 => Key::Q,
+        69 => Key::E,
+        32 => Key::Space,
+        46 => Key::Period,
+        44 => Key::Comma,
+        61 => Key::Equal,
+        45 => Key::Minus,
+        49 => Key::Key1,
+        50 => Key::Key2,
+        9 => Key::Tab,
+        262 => Key::Right,
+        263 => Key::Left,
+        264 => Key::Down,
+        265 => Key::Up,
+        _ => return 0,
+    };
+    let handle = WinHandle::from(KeyData::from_ffi(handle_bits as u64));
+    WINDOWS.with(|w| {
+        w.borrow()
+            .get(handle)
+            .is_some_and(|hw| hw.win.is_key_down(key)) as i64
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_window_mouse_x(handle_bits: i64) -> i64 {
+    let handle = WinHandle::from(KeyData::from_ffi(handle_bits as u64));
+    WINDOWS.with(|w| {
+        w.borrow()
+            .get(handle)
+            .and_then(|hw| hw.win.get_mouse_pos(minifb::MouseMode::Clamp))
+            .map_or(0, |(x, _)| x as i64)
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_window_mouse_y(handle_bits: i64) -> i64 {
+    let handle = WinHandle::from(KeyData::from_ffi(handle_bits as u64));
+    WINDOWS.with(|w| {
+        w.borrow()
+            .get(handle)
+            .and_then(|hw| hw.win.get_mouse_pos(minifb::MouseMode::Clamp))
+            .map_or(0, |(_, y)| y as i64)
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_window_mouse_down(handle_bits: i64, btn: i64) -> i64 {
+    let mb = match btn {
+        0 => minifb::MouseButton::Left,
+        1 => minifb::MouseButton::Right,
+        _ => minifb::MouseButton::Middle,
+    };
+    let handle = WinHandle::from(KeyData::from_ffi(handle_bits as u64));
+    WINDOWS.with(|w| {
+        w.borrow()
+            .get(handle)
+            .is_some_and(|hw| hw.win.get_mouse_down(mb)) as i64
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_window_mouse_scroll(handle_bits: i64) -> f64 {
+    let handle = WinHandle::from(KeyData::from_ffi(handle_bits as u64));
+    WINDOWS.with(|w| {
+        w.borrow()
+            .get(handle)
+            .and_then(|hw| hw.win.get_scroll_wheel())
+            .map_or(0.0, |(_, y)| y as f64)
+    })
+}
+
 use std::cell::Cell;
 
 thread_local! {

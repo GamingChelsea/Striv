@@ -65,6 +65,100 @@ pub struct CrateApi {
     pub methods: Vec<MethodInfo>,
 }
 
+pub fn parse_striv_toml_full(content: &str) -> Vec<(String, String)> {
+    let mut deps = Vec::new();
+    let mut in_deps = false;
+    for line in content.lines() {
+        let t = line.trim();
+        if t.is_empty() || t.starts_with('#') {
+            continue;
+        }
+        if t.starts_with('[') {
+            in_deps = t == "[dependencies]" || t == "[rust-dependencies]";
+            continue;
+        }
+        if in_deps {
+            if let Some((k, v)) = t.split_once('=') {
+                let name = k.trim().to_string();
+                let val = v.trim().to_string();
+                if !name.is_empty() && !val.is_empty() {
+                    deps.push((name, val));
+                }
+            }
+        }
+    }
+    deps
+}
+
+pub fn resolve_crate_sources_in(project_dir: &Path, deps: &[(String, String)]) -> Vec<(String, PathBuf)> {
+    let host_dir = project_dir.join(".striv-host");
+    let src_dir = host_dir.join("src");
+    fs::create_dir_all(&src_dir).expect("Failed to create .striv-host/src");
+
+    let mut cargo_toml = String::from(
+        "[workspace]\n\n[package]\nname = \"striv_host_bridge\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[lib]\ncrate-type = [\"cdylib\"]\n\n[dependencies]\n",
+    );
+    if !deps.iter().any(|(n, _)| n == "slotmap") {
+        cargo_toml.push_str("slotmap = \"1\"\n");
+    }
+    if !deps.iter().any(|(n, _)| n == "pollster") {
+        cargo_toml.push_str("pollster = \"1\"\n");
+    }
+    for (name, val) in deps {
+        if val.starts_with('{') {
+            cargo_toml.push_str(&format!("{} = {}\n", name, val));
+        } else {
+            let ver = val.trim_matches('"');
+            cargo_toml.push_str(&format!("{} = \"{}\"\n", name, ver));
+        }
+    }
+    fs::write(host_dir.join("Cargo.toml"), cargo_toml)
+        .expect("Failed to write .striv-host/Cargo.toml");
+    let lib_file = src_dir.join("lib.rs");
+    if !lib_file.exists() {
+        fs::write(&lib_file, "").expect("Failed to write .striv-host/src/lib.rs");
+    }
+
+    let manifest = host_dir.join("Cargo.toml");
+    let output = Command::new("cargo")
+        .args([
+            "metadata",
+            "--manifest-path",
+            manifest.to_str().unwrap_or(".striv-host/Cargo.toml"),
+            "--format-version",
+            "1",
+        ])
+        .output()
+        .expect("Failed to execute cargo metadata");
+
+    if !output.status.success() {
+        panic!(
+            "cargo metadata failed:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    let meta: CargoMetadata =
+        serde_json::from_slice(&output.stdout).expect("Failed to parse cargo metadata JSON");
+
+    let mut resolved = Vec::new();
+    for (dep_name, _) in deps {
+        if let Some(pkg) = meta.packages.iter().find(|p| p.name == *dep_name) {
+            if let Some(lib_target) = pkg
+                .targets
+                .iter()
+                .find(|t| t.kind.iter().any(|k| k == "lib" || k == "rlib"))
+            {
+                resolved.push((
+                    dep_name.replace('-', "_"),
+                    PathBuf::from(&lib_target.src_path),
+                ));
+            }
+        }
+    }
+    resolved
+}
+
 pub fn parse_striv_toml(content: &str) -> Vec<(String, String)> {
     let mut deps = Vec::new();
     let mut in_deps = false;

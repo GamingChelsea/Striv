@@ -10,6 +10,119 @@ static EXTERN_C_LIBS: std::sync::OnceLock<parking_lot::Mutex<Vec<libloading::Lib
 static EXTERN_C_SYMS: std::sync::OnceLock<parking_lot::Mutex<HashMap<String, usize>>> =
     std::sync::OnceLock::new();
 
+#[derive(Clone)]
+pub struct DynamicBridgeEntry {
+    pub striv_name: String,
+    pub c_sym: String,
+    pub ptr: usize,
+    pub abi_sig: String,
+}
+
+#[derive(Default)]
+struct DynamicBridgeState {
+    libs: Vec<libloading::Library>,
+    symbols: Vec<DynamicBridgeEntry>,
+    constants: HashMap<String, i64>,
+}
+
+static DYNAMIC_BRIDGES: std::sync::OnceLock<parking_lot::Mutex<DynamicBridgeState>> =
+    std::sync::OnceLock::new();
+
+pub fn load_project_bridge(dll_path: &std::path::Path) -> Result<usize, String> {
+    let lib = unsafe { libloading::Library::new(dll_path) }
+        .map_err(|e| format!("Failed to load bridge DLL '{}': {}", dll_path.display(), e))?;
+
+    unsafe {
+        let init_fn: libloading::Symbol<
+            unsafe extern "C" fn(*const lang_runtime::collections::StrivHostApi) -> i64,
+        > = lib
+            .get(b"striv_bridge_init")
+            .map_err(|e| format!("Missing striv_bridge_init: {}", e))?;
+        init_fn(lang_runtime::collections::striv_host_api());
+
+        let sym_count_fn: libloading::Symbol<unsafe extern "C" fn() -> usize> = lib
+            .get(b"striv_bridge_symbol_count")
+            .map_err(|e| format!("Missing striv_bridge_symbol_count: {}", e))?;
+        let sym_at_fn: libloading::Symbol<
+            unsafe extern "C" fn(
+                usize,
+                *mut *const u8,
+                *mut usize,
+                *mut *const u8,
+                *mut usize,
+                *mut *const u8,
+                *mut *const u8,
+                *mut usize,
+            ) -> i64,
+        > = lib
+            .get(b"striv_bridge_symbol_at")
+            .map_err(|e| format!("Missing striv_bridge_symbol_at: {}", e))?;
+
+        let count = sym_count_fn();
+        let mut loaded_syms = Vec::with_capacity(count);
+        for idx in 0..count {
+            let (mut s_ptr, mut s_len) = (std::ptr::null(), 0usize);
+            let (mut c_ptr, mut c_len) = (std::ptr::null(), 0usize);
+            let mut fn_ptr: *const u8 = std::ptr::null();
+            let (mut sig_ptr, mut sig_len) = (std::ptr::null(), 0usize);
+            if sym_at_fn(
+                idx,
+                &mut s_ptr,
+                &mut s_len,
+                &mut c_ptr,
+                &mut c_len,
+                &mut fn_ptr,
+                &mut sig_ptr,
+                &mut sig_len,
+            ) != 0
+            {
+                let striv_name =
+                    std::str::from_utf8(std::slice::from_raw_parts(s_ptr, s_len))
+                        .unwrap_or("")
+                        .to_string();
+                let c_sym = std::str::from_utf8(std::slice::from_raw_parts(c_ptr, c_len))
+                    .unwrap_or("")
+                    .to_string();
+                let abi_sig = std::str::from_utf8(std::slice::from_raw_parts(sig_ptr, sig_len))
+                    .unwrap_or("->i")
+                    .to_string();
+                loaded_syms.push(DynamicBridgeEntry {
+                    striv_name,
+                    c_sym,
+                    ptr: fn_ptr as usize,
+                    abi_sig,
+                });
+            }
+        }
+
+        let mut loaded_consts = HashMap::new();
+        if let (Ok(c_count_fn), Ok(c_at_fn)) = (
+            lib.get::<unsafe extern "C" fn() -> usize>(b"striv_bridge_const_count"),
+            lib.get::<unsafe extern "C" fn(usize, *mut *const u8, *mut usize, *mut i64) -> i64>(
+                b"striv_bridge_const_at",
+            ),
+        ) {
+            let c_count = c_count_fn();
+            for idx in 0..c_count {
+                let (mut n_ptr, mut n_len, mut val) = (std::ptr::null(), 0usize, 0i64);
+                if c_at_fn(idx, &mut n_ptr, &mut n_len, &mut val) != 0 {
+                    let name = std::str::from_utf8(std::slice::from_raw_parts(n_ptr, n_len))
+                        .unwrap_or("")
+                        .to_string();
+                    loaded_consts.insert(name, val);
+                }
+            }
+        }
+
+        let state = DYNAMIC_BRIDGES.get_or_init(|| parking_lot::Mutex::new(Default::default()));
+        let mut guard = state.lock();
+        guard.libs.push(lib);
+        guard.symbols.extend(loaded_syms);
+        guard.constants.extend(loaded_consts);
+        Ok(count)
+    }
+}
+
 fn register_extern_c_fn(lib_path: &str, sym_name: &str) {
     let syms = EXTERN_C_SYMS.get_or_init(|| parking_lot::Mutex::new(HashMap::new()));
     if syms.lock().contains_key(sym_name) {
@@ -185,6 +298,13 @@ struct CompileEnv<'a> {
     ecs_has_ref: cranelift::codegen::ir::FuncRef,
     ecs_remove_comp_ref: cranelift::codegen::ir::FuncRef,
     ecs_is_changed_ref: cranelift::codegen::ir::FuncRef,
+    ecs_mark_sparse_ref: cranelift::codegen::ir::FuncRef,
+    ecs_add_rel_ref: cranelift::codegen::ir::FuncRef,
+    ecs_remove_rel_ref: cranelift::codegen::ir::FuncRef,
+    ecs_has_rel_ref: cranelift::codegen::ir::FuncRef,
+    ecs_rel_target_ref: cranelift::codegen::ir::FuncRef,
+    ecs_was_added_ref: cranelift::codegen::ir::FuncRef,
+    ecs_was_removed_ref: cranelift::codegen::ir::FuncRef,
     mods_load_ref: cranelift::codegen::ir::FuncRef,
     mods_count_ref: cranelift::codegen::ir::FuncRef,
     mods_init_ref: cranelift::codegen::ir::FuncRef,
@@ -331,6 +451,34 @@ impl JitCompiler {
             lang_runtime::striv_ecs_is_changed as *const u8,
         );
         builder.symbol(
+            "striv_ecs_mark_sparse",
+            lang_runtime::striv_ecs_mark_sparse as *const u8,
+        );
+        builder.symbol(
+            "striv_ecs_add_rel",
+            lang_runtime::striv_ecs_add_rel as *const u8,
+        );
+        builder.symbol(
+            "striv_ecs_remove_rel",
+            lang_runtime::striv_ecs_remove_rel as *const u8,
+        );
+        builder.symbol(
+            "striv_ecs_has_rel",
+            lang_runtime::striv_ecs_has_rel as *const u8,
+        );
+        builder.symbol(
+            "striv_ecs_rel_target",
+            lang_runtime::striv_ecs_rel_target as *const u8,
+        );
+        builder.symbol(
+            "striv_ecs_was_added",
+            lang_runtime::striv_ecs_was_added as *const u8,
+        );
+        builder.symbol(
+            "striv_ecs_was_removed",
+            lang_runtime::striv_ecs_was_removed as *const u8,
+        );
+        builder.symbol(
             "striv_struct_to_json",
             lang_runtime::striv_struct_to_json as *const u8,
         );
@@ -405,6 +553,12 @@ impl JitCompiler {
         builder.symbol("striv_take_err", lang_runtime::striv_take_err as *const u8);
         for &(_, c_sym, ptr, _) in lang_runtime::generated_bridge::exported_symbols() {
             builder.symbol(c_sym, ptr);
+        }
+        if let Some(bridges) = DYNAMIC_BRIDGES.get() {
+            let guard = bridges.lock();
+            for entry in &guard.symbols {
+                builder.symbol(&entry.c_sym, entry.ptr as *const u8);
+            }
         }
         for (s_name, ptr, _, _) in lang_runtime::std_collection_symbols() {
             let sym = format!("striv_std_{}", s_name.replace("::", "__"));
@@ -831,6 +985,35 @@ impl JitCompiler {
             .module
             .declare_function("striv_ecs_is_changed", Linkage::Import, &sig_3i_i)
             .unwrap();
+        let ecs_rel_target_id = self
+            .module
+            .declare_function("striv_ecs_rel_target", Linkage::Import, &sig_3i_i)
+            .unwrap();
+        let ecs_was_added_id = self
+            .module
+            .declare_function("striv_ecs_was_added", Linkage::Import, &sig_3i_i)
+            .unwrap();
+        let ecs_was_removed_id = self
+            .module
+            .declare_function("striv_ecs_was_removed", Linkage::Import, &sig_3i_i)
+            .unwrap();
+        let mut sig_4i_i = self.module.make_signature();
+        for _ in 0..4 {
+            sig_4i_i.params.push(AbiParam::new(int_ty));
+        }
+        sig_4i_i.returns.push(AbiParam::new(int_ty));
+        let ecs_add_rel_id = self
+            .module
+            .declare_function("striv_ecs_add_rel", Linkage::Import, &sig_4i_i)
+            .unwrap();
+        let ecs_remove_rel_id = self
+            .module
+            .declare_function("striv_ecs_remove_rel", Linkage::Import, &sig_4i_i)
+            .unwrap();
+        let ecs_has_rel_id = self
+            .module
+            .declare_function("striv_ecs_has_rel", Linkage::Import, &sig_4i_i)
+            .unwrap();
         let mut sig_1i_i = self.module.make_signature();
         sig_1i_i.params.push(AbiParam::new(int_ty));
         sig_1i_i.returns.push(AbiParam::new(int_ty));
@@ -846,6 +1029,10 @@ impl JitCompiler {
         sig_2i_i.params.push(AbiParam::new(int_ty));
         sig_2i_i.params.push(AbiParam::new(int_ty));
         sig_2i_i.returns.push(AbiParam::new(int_ty));
+        let ecs_mark_sparse_id = self
+            .module
+            .declare_function("striv_ecs_mark_sparse", Linkage::Import, &sig_2i_i)
+            .unwrap();
         let mods_init_id = self
             .module
             .declare_function("striv_mods_init", Linkage::Import, &sig_2i_i)
@@ -1053,6 +1240,40 @@ impl JitCompiler {
                 })
                 .collect();
             predeclared_externs.push((striv_name.to_string(), ext_id, param_types));
+        }
+        if let Some(bridges) = DYNAMIC_BRIDGES.get() {
+            let guard = bridges.lock();
+            for entry in &guard.symbols {
+                let sig_str = entry.abi_sig.as_str();
+                let (params_s, ret_s) = sig_str.split_once("->").unwrap_or((sig_str, "i"));
+                let mut sig_ext = self.module.make_signature();
+                for ch in params_s.chars() {
+                    let ty = if ch == 'f' { types::F64 } else { int_ty };
+                    sig_ext.params.push(AbiParam::new(ty));
+                }
+                let ret_ty = if ret_s.starts_with('f') {
+                    fn_ret_floats.insert(entry.striv_name.clone());
+                    types::F64
+                } else {
+                    int_ty
+                };
+                sig_ext.returns.push(AbiParam::new(ret_ty));
+                let ext_id = self
+                    .module
+                    .declare_function(&entry.c_sym, Linkage::Import, &sig_ext)
+                    .unwrap();
+                let param_types = params_s
+                    .chars()
+                    .map(|ch| {
+                        if ch == 'f' {
+                            ("float".into(), false)
+                        } else {
+                            ("int".into(), false)
+                        }
+                    })
+                    .collect();
+                predeclared_externs.push((entry.striv_name.clone(), ext_id, param_types));
+            }
         }
         for (s_name, _, sig_str, mut_self) in lang_runtime::std_collection_symbols() {
             let sym = format!("striv_std_{}", s_name.replace("::", "__"));
@@ -1308,6 +1529,27 @@ impl JitCompiler {
                     ecs_is_changed_ref: self
                         .module
                         .declare_func_in_func(ecs_is_changed_id, builder.func),
+                    ecs_mark_sparse_ref: self
+                        .module
+                        .declare_func_in_func(ecs_mark_sparse_id, builder.func),
+                    ecs_add_rel_ref: self
+                        .module
+                        .declare_func_in_func(ecs_add_rel_id, builder.func),
+                    ecs_remove_rel_ref: self
+                        .module
+                        .declare_func_in_func(ecs_remove_rel_id, builder.func),
+                    ecs_has_rel_ref: self
+                        .module
+                        .declare_func_in_func(ecs_has_rel_id, builder.func),
+                    ecs_rel_target_ref: self
+                        .module
+                        .declare_func_in_func(ecs_rel_target_id, builder.func),
+                    ecs_was_added_ref: self
+                        .module
+                        .declare_func_in_func(ecs_was_added_id, builder.func),
+                    ecs_was_removed_ref: self
+                        .module
+                        .declare_func_in_func(ecs_was_removed_id, builder.func),
                     mods_load_ref: self.module.declare_func_in_func(mods_load_id, builder.func),
                     mods_count_ref: self.module.declare_func_in_func(mods_count_id, builder.func),
                     mods_init_ref: self.module.declare_func_in_func(mods_init_id, builder.func),
@@ -1980,7 +2222,14 @@ fn compile_method_call(
             }
         }
     }
-    if (method == "has" || method == "remove_comp" || method == "is_changed") && args.len() == 2 {
+    if (method == "has"
+        || method == "remove_comp"
+        || method == "is_changed"
+        || method == "rel_target"
+        || method == "was_added"
+        || method == "was_removed")
+        && args.len() == 2
+    {
         let ecs_var_opt = match vars.get(receiver) {
             Some(VarInfo::Handle {
                 var, type_name, ..
@@ -1993,19 +2242,71 @@ fn compile_method_call(
             let ent_val = compile_expr(&args[0], builder, vars, env);
             let comp_name = match &args[1] {
                 Expr::Var(t) => t.as_str(),
-                _ => panic!("ecs.{}() expects component type name as 2nd argument", method),
+                _ => panic!("ecs.{}() expects component/relation name as 2nd argument", method),
             };
             let tid = builder
                 .ins()
                 .iconst(env.int_ty, striv_syntax::fnv1a_64(comp_name));
-            let func_ref = if method == "has" {
-                env.ecs_has_ref
-            } else if method == "remove_comp" {
-                env.ecs_remove_comp_ref
-            } else {
-                env.ecs_is_changed_ref
+            let func_ref = match method {
+                "has" => env.ecs_has_ref,
+                "remove_comp" => env.ecs_remove_comp_ref,
+                "is_changed" => env.ecs_is_changed_ref,
+                "rel_target" => env.ecs_rel_target_ref,
+                "was_added" => env.ecs_was_added_ref,
+                _ => env.ecs_was_removed_ref,
             };
             let c = builder.ins().call(func_ref, &[ecs_ptr, ent_val, tid]);
+            return builder.inst_results(c)[0];
+        }
+    }
+    if method == "mark_sparse" && args.len() == 1 {
+        let ecs_var_opt = match vars.get(receiver) {
+            Some(VarInfo::Handle {
+                var, type_name, ..
+            }) if type_name == "Ecs" => Some(*var),
+            Some(VarInfo::Int { var, .. }) => Some(*var),
+            _ => None,
+        };
+        if let Some(ecs_var) = ecs_var_opt {
+            let ecs_ptr = builder.use_var(ecs_var);
+            let comp_name = match &args[0] {
+                Expr::Var(t) => t.as_str(),
+                _ => panic!("ecs.mark_sparse() expects component type name"),
+            };
+            let tid = builder
+                .ins()
+                .iconst(env.int_ty, striv_syntax::fnv1a_64(comp_name));
+            let c = builder.ins().call(env.ecs_mark_sparse_ref, &[ecs_ptr, tid]);
+            return builder.inst_results(c)[0];
+        }
+    }
+    if (method == "add_rel" || method == "remove_rel" || method == "has_rel") && args.len() == 3 {
+        let ecs_var_opt = match vars.get(receiver) {
+            Some(VarInfo::Handle {
+                var, type_name, ..
+            }) if type_name == "Ecs" => Some(*var),
+            Some(VarInfo::Int { var, .. }) => Some(*var),
+            _ => None,
+        };
+        if let Some(ecs_var) = ecs_var_opt {
+            let ecs_ptr = builder.use_var(ecs_var);
+            let ent_val = compile_expr(&args[0], builder, vars, env);
+            let rel_name = match &args[1] {
+                Expr::Var(t) => t.as_str(),
+                _ => panic!("ecs.{}() expects relation name as 2nd argument", method),
+            };
+            let rel_tid = builder
+                .ins()
+                .iconst(env.int_ty, striv_syntax::fnv1a_64(rel_name));
+            let target_val = compile_expr(&args[2], builder, vars, env);
+            let func_ref = match method {
+                "add_rel" => env.ecs_add_rel_ref,
+                "remove_rel" => env.ecs_remove_rel_ref,
+                _ => env.ecs_has_rel_ref,
+            };
+            let c = builder
+                .ins()
+                .call(func_ref, &[ecs_ptr, ent_val, rel_tid, target_val]);
             return builder.inst_results(c)[0];
         }
     }
@@ -3037,6 +3338,12 @@ fn compile_stmt_with_rest(
                     assert!(is_mut, "Error: '{}' is not `mut`!", name);
                     let val = to_f64(compile_expr(value, builder, vars, env), builder);
                     builder.def_var(var, val);
+                    false
+                }
+                Some(VarInfo::Tweak { addr }) => {
+                    let val = compile_expr(value, builder, vars, env);
+                    let ptr_val = builder.ins().iconst(env.int_ty, addr);
+                    builder.ins().store(MemFlagsData::new(), val, ptr_val, 0);
                     false
                 }
                 _ => panic!("'{}' is not a regular number variable", name),
@@ -4213,6 +4520,11 @@ fn compile_expr(
                         .find(|(k, _)| *k == key)
                         .map(|(_, v)| *v)
                 })
+                .or_else(|| {
+                    DYNAMIC_BRIDGES
+                        .get()
+                        .and_then(|b| b.lock().constants.get(&key).copied())
+                })
                 .unwrap_or_else(|| panic!("Unknown constant `{}::{}`", ty, member));
             builder.ins().iconst(env.int_ty, val)
         }
@@ -4316,6 +4628,8 @@ fn compile_expr(
                 }
                 if let Some(&c_val) = env.user_enums.get(name) {
                     builder.ins().iconst(env.int_ty, c_val)
+                } else if let Some((func_ref, _)) = env.funcs.get(name) {
+                    builder.ins().func_addr(env.int_ty, *func_ref)
                 } else {
                     panic!("Unknown integer variable: {}", name)
                 }
@@ -4909,8 +5223,22 @@ fn collect_free_vars_in_expr(
             if !bound.contains(receiver) && !out.contains(receiver) {
                 out.push(receiver.clone());
             }
-            if (method == "has" || method == "remove_comp" || method == "is_changed") && args.len() == 2 {
+            if (method == "has"
+                || method == "remove_comp"
+                || method == "is_changed"
+                || method == "rel_target"
+                || method == "was_added"
+                || method == "was_removed")
+                && args.len() == 2
+            {
                 collect_free_vars_in_expr(&args[0], bound, out);
+            } else if method == "mark_sparse" && args.len() == 1 {
+                // type name argument, no free vars
+            } else if (method == "add_rel" || method == "remove_rel" || method == "has_rel")
+                && args.len() == 3
+            {
+                collect_free_vars_in_expr(&args[0], bound, out);
+                collect_free_vars_in_expr(&args[2], bound, out);
             } else {
                 for a in args {
                     collect_free_vars_in_expr(a, bound, out);

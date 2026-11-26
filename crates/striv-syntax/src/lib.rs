@@ -2130,16 +2130,106 @@ impl Parser {
     }
 }
 
+fn find_rust_block_ranges(src: &str) -> Vec<std::ops::Range<usize>> {
+    let mut ranges = Vec::new();
+    let bytes = src.as_bytes();
+    let len = bytes.len();
+    let mut i = 0;
+    while i < len {
+        // Skip line comments
+        if i + 1 < len && bytes[i] == b'/' && bytes[i + 1] == b'/' {
+            while i < len && bytes[i] != b'\n' {
+                i += 1;
+            }
+            continue;
+        }
+        // Skip string literals
+        if bytes[i] == b'"' {
+            i += 1;
+            while i < len {
+                if bytes[i] == b'\\' {
+                    i += 2;
+                    continue;
+                }
+                if bytes[i] == b'"' {
+                    i += 1;
+                    break;
+                }
+                i += 1;
+            }
+            continue;
+        }
+        // Check for `rust` keyword
+        if i + 4 <= len && &bytes[i..i + 4] == b"rust" {
+            let prev_ok = i == 0 || !(bytes[i - 1].is_ascii_alphanumeric() || bytes[i - 1] == b'_');
+            let next_ok = i + 4 == len || !(bytes[i + 4].is_ascii_alphanumeric() || bytes[i + 4] == b'_');
+            if prev_ok && next_ok {
+                let mut j = i + 4;
+                // Advance to opening `{` of `rust { ... }` or `rust fn ... { ... }`
+                while j < len && bytes[j] != b'{' && bytes[j] != b'\n' {
+                    j += 1;
+                }
+                if j < len && bytes[j] == b'{' {
+                    let start = j;
+                    let mut depth = 0usize;
+                    while j < len {
+                        if j + 1 < len && bytes[j] == b'/' && bytes[j + 1] == b'/' {
+                            while j < len && bytes[j] != b'\n' {
+                                j += 1;
+                            }
+                            continue;
+                        }
+                        if bytes[j] == b'"' {
+                            j += 1;
+                            while j < len {
+                                if bytes[j] == b'\\' {
+                                    j += 2;
+                                    continue;
+                                }
+                                if bytes[j] == b'"' {
+                                    j += 1;
+                                    break;
+                                }
+                                j += 1;
+                            }
+                            continue;
+                        }
+                        if bytes[j] == b'{' {
+                            depth += 1;
+                        } else if bytes[j] == b'}' {
+                            depth -= 1;
+                            if depth == 0 {
+                                ranges.push(start..j + 1);
+                                j += 1;
+                                break;
+                            }
+                        }
+                        j += 1;
+                    }
+                    i = j;
+                    continue;
+                }
+            }
+        }
+        i += 1;
+    }
+    ranges
+}
+
 pub fn check_diagnostics(src: &str) -> Vec<ParseError> {
     check_diagnostics_with_dialect(src, Dialect::Rust)
 }
 
 pub fn check_diagnostics_with_dialect(src: &str, dialect: Dialect) -> Vec<ParseError> {
     let mut errors = Vec::new();
+    let rust_ranges = find_rust_block_ranges(src);
 
     // 1. Check lexer errors (unknown characters or invalid hex literals like `0x0B0E1ssssss`)
     for (res, span) in Token::lexer(src).spanned() {
         if res.is_err() {
+            if rust_ranges.iter().any(|r| span.start >= r.start && span.end <= r.end) {
+                continue;
+            }
             let slice = &src[span.clone()];
             let msg = if slice.starts_with("0x") {
                 format!("Invalid hex literal: `{}`", slice)

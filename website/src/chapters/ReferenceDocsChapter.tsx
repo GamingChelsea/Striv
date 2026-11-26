@@ -271,17 +271,23 @@ copy := buf // Auto-Clone oder 0-ns-Move`,
     id: 'mod-ecs',
     name: 'Ecs',
     category: 'module',
-    signature: 'Ecs::new(), spawn(), set(), set_parent(), detach(), parent_of(), has(), remove_comp(), set_group(), group_of(), in_same_group(), is_changed(), clear_changed(), remove_entity()',
+    signature: 'Ecs::new(), spawn(), set(), mark_sparse(Comp), add_rel(e, Rel, target), remove_rel(), has_rel(), rel_target(), was_added(), was_removed(), clear_events(), archetype_count(), entity_count(), set_parent(), detach(), parent_of(), has(), remove_comp(), set_group(), group_of(), in_same_group(), is_changed(), clear_changed(), remove_entity()',
     summary: {
-      en: 'Cache-friendly Sparse-Set ECS (3.0) with parent-child hierarchies, cascade delete on remove_entity, entity groups (e.g. subspaces/bubbles), and per-component change detection (is_changed / clear_changed).',
-      de: 'Cache-freundliches Sparse-Set-ECS (3.0) mit Eltern-Kind-Hierarchien, Kaskaden-Delete in remove_entity, Entity-Gruppen (z. B. Subspaces/Bubbles) und Komponenten-Change-Detection (is_changed / clear_changed).',
+      en: 'Hybrid Archetype + Sparse-Set ECS (4.0) with query caching, typed entity relationships (add_rel / rel_target), lifecycle tracking (was_added / was_removed), parent-child hierarchies, entity groups, and per-component change detection.',
+      de: 'Hybrides Archetype + Sparse-Set-ECS (4.0) mit Query-Caching, typisierten Entity-Relationships (add_rel / rel_target), Lifecycle-Events (was_added / was_removed), Eltern-Kind-Hierarchien, Entity-Gruppen und Komponenten-Change-Detection.',
     },
     rustCode: `let mut ecs = Ecs::new()
-let e = ecs.spawn()
-ecs.set(e, Orbit { alt: 100.0 })`,
+ecs.mark_sparse(EngineActive)
+let ship = ecs.spawn()
+let planet = ecs.spawn()
+ecs.set(ship, Orbit { alt: 100.0 })
+ecs.add_rel(ship, Orbiting, planet)`,
     odinCode: `ecs := Ecs::new()
-e := ecs.spawn()
-ecs.set(e, Orbit { alt: 100.0 })`,
+ecs.mark_sparse(EngineActive)
+ship := ecs.spawn()
+planet := ecs.spawn()
+ecs.set(ship, Orbit { alt: 100.0 })
+ecs.add_rel(ship, Orbiting, planet)`,
   },
   {
     id: 'mod-mods',
@@ -303,7 +309,7 @@ mods.tick(ecs, 0.016)`,
     id: 'mod-window',
     name: 'Window',
     category: 'module',
-    signature: 'Window::new(title, w, h), is_open(), clear(rgb), draw_rect(x, y, w, h, rgb), present()',
+    signature: 'Window::new(title, w, h), is_open(), clear(rgb), draw_rect(x, y, w, h, rgb), draw_circle(cx, cy, r, rgb), draw_line(x0, y0, x1, y1, rgb), draw_text(x, y, text, rgb, scale), is_key_down(code), mouse_x(), mouse_y(), mouse_down(btn), mouse_scroll(), width(), height(), present()',
     summary: {
       en: 'Built-in 2D framebuffer window (powered by minifb) for instant prototyping, orbit maps, and debug views. For full 3D GPU games, use foreign "raylib.dll" / "SDL3.dll" or striv add wgpu.',
       de: 'Eingebautes 2D-Framebuffer-Fenster (via minifb) für sofortiges Prototyping, Orbit-Karten und Debug-Ansichten. Für aufwendige 3D-GPU-Spiele nutze foreign "raylib.dll" / "SDL3.dll" oder striv add wgpu.',

@@ -506,6 +506,29 @@ impl LanguageServer for StrivLsp {
                     });
                 }
             }
+            // Also load dynamic bridge metadata from .striv-host/striv_bridge_meta.json if present
+            if let Ok(meta_txt) = std::fs::read_to_string(".striv-host/striv_bridge_meta.json") {
+                for seg in meta_txt.split("\"name\":\"") .skip(1) {
+                    if let Some((full_name, rest)) = seg.split_once('"') {
+                        if let Some(member) = full_name.strip_prefix(&prefix) {
+                            let sig = rest
+                                .split("\"sig\":\"")
+                                .nth(1)
+                                .and_then(|s| s.split('"').next())
+                                .unwrap_or("");
+                            items.push(CompletionItem {
+                                label: member.to_string(),
+                                kind: Some(CompletionItemKind::FUNCTION),
+                                insert_text: Some(format!("{}($0)", member)),
+                                insert_text_format: Some(InsertTextFormat::SNIPPET),
+                                detail: Some(format!("Dynamic Bridge ({})", sig)),
+                                sort_text: Some(format!("1_{}", member)),
+                                ..Default::default()
+                            });
+                        }
+                    }
+                }
+            }
             return Ok(Some(CompletionResponse::Array(items)));
         }
 
@@ -575,6 +598,16 @@ impl LanguageServer for StrivLsp {
                     ("is_open", "is_open()", "fn is_open() -> bool"),
                     ("clear", "clear(${1:0x0B0E14})", "fn clear(rgb: int)"),
                     ("draw_rect", "draw_rect(${1:x}, ${2:y}, ${3:w}, ${4:h}, ${5:0xFFAA00})", "fn draw_rect(x: int, y: int, w: int, h: int, rgb: int)"),
+                    ("draw_circle", "draw_circle(${1:cx}, ${2:cy}, ${3:r}, ${4:0x3399FF})", "fn draw_circle(cx: int, cy: int, r: int, rgb: int)"),
+                    ("draw_line", "draw_line(${1:x0}, ${2:y0}, ${3:x1}, ${4:y1}, ${5:0xFFFFFF})", "fn draw_line(x0: int, y0: int, x1: int, y1: int, rgb: int)"),
+                    ("draw_text", "draw_text(${1:x}, ${2:y}, ${3:\"text\"}, ${4:0xFFFFFF}, ${5:2})", "fn draw_text(x: int, y: int, text: str, rgb: int, scale: int)"),
+                    ("is_key_down", "is_key_down(${1:87})", "fn is_key_down(key_code: int) -> int"),
+                    ("mouse_x", "mouse_x()", "fn mouse_x() -> int"),
+                    ("mouse_y", "mouse_y()", "fn mouse_y() -> int"),
+                    ("mouse_down", "mouse_down(${1:0})", "fn mouse_down(btn: int) -> int"),
+                    ("mouse_scroll", "mouse_scroll()", "fn mouse_scroll() -> float"),
+                    ("width", "width()", "fn width() -> int"),
+                    ("height", "height()", "fn height() -> int"),
                     ("present", "present()", "fn present() -> bool"),
                 ] {
                     items.push(CompletionItem {
@@ -622,6 +655,16 @@ impl LanguageServer for StrivLsp {
                     ("set_group", "set_group(${1:ent}, ${2:group_id})", "fn set_group(ent: int, group_id: int)"),
                     ("group_of", "group_of(${1:ent})", "fn group_of(ent: int) -> int"),
                     ("in_same_group", "in_same_group(${1:a}, ${2:b})", "fn in_same_group(a: int, b: int) -> int"),
+                    ("mark_sparse", "mark_sparse(${1:Comp})", "fn mark_sparse(Comp)"),
+                    ("add_rel", "add_rel(${1:ent}, ${2:Rel}, ${3:target})", "fn add_rel(ent: int, Rel, target: int)"),
+                    ("remove_rel", "remove_rel(${1:ent}, ${2:Rel}, ${3:target})", "fn remove_rel(ent: int, Rel, target: int) -> int"),
+                    ("has_rel", "has_rel(${1:ent}, ${2:Rel}, ${3:target})", "fn has_rel(ent: int, Rel, target: int) -> int"),
+                    ("rel_target", "rel_target(${1:ent}, ${2:Rel})", "fn rel_target(ent: int, Rel) -> int"),
+                    ("was_added", "was_added(${1:ent}, ${2:Comp})", "fn was_added(ent: int, Comp) -> int"),
+                    ("was_removed", "was_removed(${1:ent}, ${2:Comp})", "fn was_removed(ent: int, Comp) -> int"),
+                    ("clear_events", "clear_events()", "fn clear_events()"),
+                    ("archetype_count", "archetype_count()", "fn archetype_count() -> int"),
+                    ("entity_count", "entity_count()", "fn entity_count() -> int"),
                 ] {
                     items.push(CompletionItem {
                         label: m.to_string(),
@@ -644,7 +687,9 @@ impl LanguageServer for StrivLsp {
                     ("is_valid", "is_valid()", "fn is_valid() -> bool"),
                     ("write_u32", "write_u32(${1:val})", "fn write_u32(v: int)"),
                     ("write_i64", "write_i64(${1:val})", "fn write_i64(v: int)"),
+                    ("write_f32", "write_f32(${1:val})", "fn write_f32(v: float)"),
                     ("write_f64", "write_f64(${1:val})", "fn write_f64(v: float)"),
+                    ("clear", "clear()", "fn clear()"),
                     ("read_u32", "read_u32(${1:offset})", "fn read_u32(offset: int) -> int"),
                     ("read_i64", "read_i64(${1:offset})", "fn read_i64(offset: int) -> int"),
                     ("read_f64", "read_f64(${1:offset})", "fn read_f64(offset: int) -> float"),
@@ -666,6 +711,16 @@ impl LanguageServer for StrivLsp {
                     ("is_open", "is_open()", "fn is_open() -> bool"),
                     ("clear", "clear(${1:0x0B0E14})", "fn clear(rgb: int)"),
                     ("draw_rect", "draw_rect(${1:x}, ${2:y}, ${3:w}, ${4:h}, ${5:0xFFAA00})", "fn draw_rect(x: int, y: int, w: int, h: int, rgb: int)"),
+                    ("draw_circle", "draw_circle(${1:cx}, ${2:cy}, ${3:r}, ${4:0x3399FF})", "fn draw_circle(cx: int, cy: int, r: int, rgb: int)"),
+                    ("draw_line", "draw_line(${1:x0}, ${2:y0}, ${3:x1}, ${4:y1}, ${5:0xFFFFFF})", "fn draw_line(x0: int, y0: int, x1: int, y1: int, rgb: int)"),
+                    ("draw_text", "draw_text(${1:x}, ${2:y}, ${3:\"text\"}, ${4:0xFFFFFF}, ${5:2})", "fn draw_text(x: int, y: int, text: str, rgb: int, scale: int)"),
+                    ("is_key_down", "is_key_down(${1:87})", "fn is_key_down(key_code: int) -> int"),
+                    ("mouse_x", "mouse_x()", "fn mouse_x() -> int"),
+                    ("mouse_y", "mouse_y()", "fn mouse_y() -> int"),
+                    ("mouse_down", "mouse_down(${1:0})", "fn mouse_down(btn: int) -> int"),
+                    ("mouse_scroll", "mouse_scroll()", "fn mouse_scroll() -> float"),
+                    ("width", "width()", "fn width() -> int"),
+                    ("height", "height()", "fn height() -> int"),
                     ("present", "present()", "fn present() -> bool"),
                 ] {
                     items.push(CompletionItem {
@@ -713,6 +768,16 @@ impl LanguageServer for StrivLsp {
                     ("set_group", "set_group(${1:ent}, ${2:group_id})", "fn set_group(ent: int, group_id: int)"),
                     ("group_of", "group_of(${1:ent})", "fn group_of(ent: int) -> int"),
                     ("in_same_group", "in_same_group(${1:a}, ${2:b})", "fn in_same_group(a: int, b: int) -> int"),
+                    ("mark_sparse", "mark_sparse(${1:Comp})", "fn mark_sparse(Comp)"),
+                    ("add_rel", "add_rel(${1:ent}, ${2:Rel}, ${3:target})", "fn add_rel(ent: int, Rel, target: int)"),
+                    ("remove_rel", "remove_rel(${1:ent}, ${2:Rel}, ${3:target})", "fn remove_rel(ent: int, Rel, target: int) -> int"),
+                    ("has_rel", "has_rel(${1:ent}, ${2:Rel}, ${3:target})", "fn has_rel(ent: int, Rel, target: int) -> int"),
+                    ("rel_target", "rel_target(${1:ent}, ${2:Rel})", "fn rel_target(ent: int, Rel) -> int"),
+                    ("was_added", "was_added(${1:ent}, ${2:Comp})", "fn was_added(ent: int, Comp) -> int"),
+                    ("was_removed", "was_removed(${1:ent}, ${2:Comp})", "fn was_removed(ent: int, Comp) -> int"),
+                    ("clear_events", "clear_events()", "fn clear_events()"),
+                    ("archetype_count", "archetype_count()", "fn archetype_count() -> int"),
+                    ("entity_count", "entity_count()", "fn entity_count() -> int"),
                 ] {
                     items.push(CompletionItem {
                         label: m.to_string(),
@@ -766,6 +831,16 @@ impl LanguageServer for StrivLsp {
                     ("is_open", "is_open()", "fn is_open() -> bool"),
                     ("clear", "clear(${1:0x0B0E14})", "fn clear(rgb: int)"),
                     ("draw_rect", "draw_rect(${1:x}, ${2:y}, ${3:w}, ${4:h}, ${5:0xFFAA00})", "fn draw_rect(x: int, y: int, w: int, h: int, rgb: int)"),
+                    ("draw_circle", "draw_circle(${1:cx}, ${2:cy}, ${3:r}, ${4:0x3399FF})", "fn draw_circle(cx: int, cy: int, r: int, rgb: int)"),
+                    ("draw_line", "draw_line(${1:x0}, ${2:y0}, ${3:x1}, ${4:y1}, ${5:0xFFFFFF})", "fn draw_line(x0: int, y0: int, x1: int, y1: int, rgb: int)"),
+                    ("draw_text", "draw_text(${1:x}, ${2:y}, ${3:\"text\"}, ${4:0xFFFFFF}, ${5:2})", "fn draw_text(x: int, y: int, text: str, rgb: int, scale: int)"),
+                    ("is_key_down", "is_key_down(${1:87})", "fn is_key_down(key_code: int) -> int"),
+                    ("mouse_x", "mouse_x()", "fn mouse_x() -> int"),
+                    ("mouse_y", "mouse_y()", "fn mouse_y() -> int"),
+                    ("mouse_down", "mouse_down(${1:0})", "fn mouse_down(btn: int) -> int"),
+                    ("mouse_scroll", "mouse_scroll()", "fn mouse_scroll() -> float"),
+                    ("width", "width()", "fn width() -> int"),
+                    ("height", "height()", "fn height() -> int"),
                     ("present", "present()", "fn present() -> bool"),
                 ] {
                     items.push(CompletionItem {
@@ -813,6 +888,16 @@ impl LanguageServer for StrivLsp {
                     ("set_group", "set_group(${1:ent}, ${2:group_id})", "fn set_group(ent: int, group_id: int)"),
                     ("group_of", "group_of(${1:ent})", "fn group_of(ent: int) -> int"),
                     ("in_same_group", "in_same_group(${1:a}, ${2:b})", "fn in_same_group(a: int, b: int) -> int"),
+                    ("mark_sparse", "mark_sparse(${1:Comp})", "fn mark_sparse(Comp)"),
+                    ("add_rel", "add_rel(${1:ent}, ${2:Rel}, ${3:target})", "fn add_rel(ent: int, Rel, target: int)"),
+                    ("remove_rel", "remove_rel(${1:ent}, ${2:Rel}, ${3:target})", "fn remove_rel(ent: int, Rel, target: int) -> int"),
+                    ("has_rel", "has_rel(${1:ent}, ${2:Rel}, ${3:target})", "fn has_rel(ent: int, Rel, target: int) -> int"),
+                    ("rel_target", "rel_target(${1:ent}, ${2:Rel})", "fn rel_target(ent: int, Rel) -> int"),
+                    ("was_added", "was_added(${1:ent}, ${2:Comp})", "fn was_added(ent: int, Comp) -> int"),
+                    ("was_removed", "was_removed(${1:ent}, ${2:Comp})", "fn was_removed(ent: int, Comp) -> int"),
+                    ("clear_events", "clear_events()", "fn clear_events()"),
+                    ("archetype_count", "archetype_count()", "fn archetype_count() -> int"),
+                    ("entity_count", "entity_count()", "fn entity_count() -> int"),
                 ] {
                     items.push(CompletionItem {
                         label: m.to_string(),

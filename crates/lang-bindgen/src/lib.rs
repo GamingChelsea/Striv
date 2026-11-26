@@ -1,7 +1,85 @@
 pub mod codegen;
+pub mod dynamic_bridge;
 pub mod scanner;
 
 use syn::{FnArg, Item, ReturnType, Type};
+
+pub fn sync_project_dynamic(
+    toml_path: &std::path::Path,
+) -> Result<(std::path::PathBuf, codegen::SyncSummary), String> {
+    let project_dir = toml_path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| std::path::Path::new("."));
+    let content = std::fs::read_to_string(toml_path)
+        .map_err(|e| format!("Failed to read {}: {}", toml_path.display(), e))?;
+    let deps = scanner::parse_striv_toml_full(&content);
+    if deps.is_empty() {
+        return Err("No [dependencies] in striv.toml".to_string());
+    }
+
+    let host_dir = project_dir.join(".striv-host");
+    let dll_name = if cfg!(windows) {
+        "striv_host_bridge.dll"
+    } else if cfg!(target_os = "macos") {
+        "libstriv_host_bridge.dylib"
+    } else {
+        "libstriv_host_bridge.so"
+    };
+    let dll_path = host_dir.join("target").join("release").join(dll_name);
+    let hash_file = host_dir.join(".bridge_hash");
+
+    // Hash dependencies + bindgen version
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for b in content.as_bytes().iter().chain(b"striv-bindgen-2.0-v3") {
+        hash ^= *b as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    let hash_str = format!("{:016x}", hash);
+
+    if dll_path.exists() {
+        if let Ok(prev) = std::fs::read_to_string(&hash_file) {
+            if prev.trim() == hash_str {
+                let summary = codegen::SyncSummary {
+                    crate_count: deps.len(),
+                    struct_count: 0,
+                    enum_count: 0,
+                    fn_count: 0,
+                };
+                return Ok((dll_path, summary));
+            }
+        }
+    }
+
+    let sources = scanner::resolve_crate_sources_in(project_dir, &deps);
+    let apis: Vec<scanner::CrateApi> = sources
+        .iter()
+        .map(|(name, path)| scanner::scan_crate_api(name, path))
+        .collect();
+    let dep_names: Vec<String> = deps.iter().map(|(n, _)| n.replace('-', "_")).collect();
+    let (code, meta_json, summary) = codegen::emit_dynamic_bridge_crate(&apis, &dep_names);
+
+    std::fs::write(host_dir.join("src").join("lib.rs"), code)
+        .map_err(|e| format!("Failed to write .striv-host/src/lib.rs: {}", e))?;
+    std::fs::write(host_dir.join("striv_bridge_meta.json"), meta_json)
+        .map_err(|e| format!("Failed to write striv_bridge_meta.json: {}", e))?;
+
+    let manifest = host_dir.join("Cargo.toml");
+    let status = std::process::Command::new("cargo")
+        .args([
+            "build",
+            "--release",
+            "--manifest-path",
+            manifest.to_str().unwrap_or(".striv-host/Cargo.toml"),
+        ])
+        .status()
+        .map_err(|e| format!("Failed to run cargo build for .striv-host: {}", e))?;
+    if !status.success() {
+        return Err("cargo build --release for .striv-host failed".to_string());
+    }
+    let _ = std::fs::write(&hash_file, hash_str);
+    Ok((dll_path, summary))
+}
 
 pub fn sync_project(toml_path: &str) -> (String, codegen::SyncSummary) {
     let content = std::fs::read_to_string(toml_path)

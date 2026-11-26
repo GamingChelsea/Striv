@@ -1,4 +1,5 @@
 use crate::scanner::{ArgKind, CrateApi, RetKind};
+pub use crate::dynamic_bridge::emit_dynamic_bridge_crate;
 
 #[derive(Debug, Clone)]
 pub struct SyncSummary {
@@ -215,15 +216,22 @@ pub fn emit_crate_bridge(apis: &[CrateApi]) -> (String, SyncSummary) {
                         ));
                         call_args.push(format!("h_arg{i}"));
                     }
-                    ArgKind::HandleRef(_, _) => {
-                        // Skip emitting invalid borrows by returning 0 if reached
-                        call_args.push("unreachable!()".to_string());
+                    ArgKind::HandleRef(h_struct, is_mut) => {
+                        let vault =
+                            format!("VAULT_{}_{}", cr.to_uppercase(), h_struct.to_uppercase());
+                        let key_ty = format!("AutoKey_{}_{}", cr, h_struct);
+                        let borrow = if *is_mut { "borrow_mut" } else { "borrow" };
+                        let getter = if *is_mut { "get_mut" } else { "get" };
+                        out.push_str(&format!(
+                            "    let mut h_map{i} = {vault}.{borrow}();\n    let h_arg{i} = h_map{i}.{getter}({key_ty}::from(KeyData::from_ffi(arg{i} as u64))).expect(\"Invalid handle ref\");\n"
+                        ));
+                        call_args.push(format!("h_arg{i}"));
                     }
                 }
             }
 
             let args_joined = call_args.join(", ");
-            let call_expr = match (&m.struct_name, m.receiver) {
+            let raw_call_expr = match (&m.struct_name, m.receiver) {
                 (Some(s), Some(is_mut)) => {
                     let vault = format!("VAULT_{}_{}", cr.to_uppercase(), s.to_uppercase());
                     let key_ty = format!("AutoKey_{}_{}", cr, s);
@@ -236,6 +244,11 @@ pub fn emit_crate_bridge(apis: &[CrateApi]) -> (String, SyncSummary) {
                 }
                 (Some(s), None) => format!("{cr}::{s}::{}({args_joined})", m.name),
                 (None, _) => format!("{cr}::{}({args_joined})", m.name),
+            };
+            let call_expr = if m.is_async {
+                format!("pollster::block_on({raw_call_expr})")
+            } else {
+                raw_call_expr
             };
 
             match &m.ret {

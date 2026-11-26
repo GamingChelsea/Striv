@@ -2,6 +2,23 @@ use std::{env, fs, mem, time::Instant};
 use striv_jit::JitCompiler;
 use striv_syntax::format_source;
 
+fn ensure_project_bridge(entry_file: &std::path::Path) {
+    let abs = std::fs::canonicalize(entry_file).unwrap_or_else(|_| entry_file.to_path_buf());
+    let mut cur = abs.parent();
+    while let Some(dir) = cur {
+        let toml = dir.join("striv.toml");
+        if toml.exists() {
+            if let Ok((dll_path, _)) = lang_bindgen::sync_project_dynamic(&toml) {
+                if let Err(e) = striv_jit::load_project_bridge(&dll_path) {
+                    eprintln!("[Striv] Warning: {}", e);
+                }
+            }
+            break;
+        }
+        cur = dir.parent();
+    }
+}
+
 fn main() {
     let args: Vec<String> = env::args().collect();
     let cmd = args.get(1).map(|s| s.as_str()).unwrap_or("help");
@@ -12,6 +29,7 @@ fn main() {
                 .get(2)
                 .expect("Please provide a file: cargo run -p striv-cli -- run test.strv");
 
+            ensure_project_bridge(std::path::Path::new(path));
             let start = Instant::now();
             let prog = striv_syntax::load_program_with_imports(std::path::Path::new(path))
                 .expect("Failed to load program");
@@ -417,13 +435,27 @@ fn main() {
         }
         "sync" => {
             let toml_path = args.get(2).map(|s| s.as_str()).unwrap_or("striv.toml");
-            let (code, summary) = lang_bindgen::sync_project(toml_path);
-            fs::write("crates/lang-runtime/src/generated_bridge.rs", code)
-                .expect("Could not write generated_bridge.rs");
-            println!(
-                "[Striv] Synced {} crate(s): {} struct vault(s), {} enum(s), {} function(s) -> crates/lang-runtime/src/generated_bridge.rs",
-                summary.crate_count, summary.struct_count, summary.enum_count, summary.fn_count
-            );
+            let p = std::path::Path::new(toml_path);
+            match lang_bindgen::sync_project_dynamic(p) {
+                Ok((dll_path, summary)) => {
+                    println!(
+                        "[Striv] Synced {} crate(s), {} function(s) -> {}",
+                        summary.crate_count,
+                        summary.fn_count,
+                        dll_path.display()
+                    );
+                }
+                Err(e) => {
+                    eprintln!("[Striv] Dynamic sync skipped ({}), falling back to runtime bridge", e);
+                    let (code, summary) = lang_bindgen::sync_project(toml_path);
+                    fs::write("crates/lang-runtime/src/generated_bridge.rs", code)
+                        .expect("Could not write generated_bridge.rs");
+                    println!(
+                        "[Striv] Synced {} crate(s): {} struct vault(s), {} enum(s), {} function(s) -> crates/lang-runtime/src/generated_bridge.rs",
+                        summary.crate_count, summary.struct_count, summary.enum_count, summary.fn_count
+                    );
+                }
+            }
         }
         "bindgen" => {
             let input = args

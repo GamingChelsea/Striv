@@ -522,11 +522,25 @@ pub fn std_collection_symbols() -> Vec<(&'static str, *const u8, &'static str, b
         ("Ecs::group_of", crate::ecs::striv_ecs_group_of as *const u8, "ii->i", false),
         ("Ecs::in_same_group", crate::ecs::striv_ecs_in_same_group as *const u8, "iii->i", false),
         ("Ecs::clear_changed", crate::ecs::striv_ecs_clear_changed as *const u8, "i->i", false),
+        ("Ecs::clear_events", crate::ecs::striv_ecs_clear_events as *const u8, "i->i", false),
+        ("Ecs::archetype_count", crate::ecs::striv_ecs_archetype_count as *const u8, "i->i", false),
+        ("Ecs::entity_count", crate::ecs::striv_ecs_entity_count as *const u8, "i->i", false),
         ("Window::new", crate::striv_window_new as *const u8, "iii->i", false),
         ("Window::is_open", crate::striv_window_is_open as *const u8, "i->i", false),
         ("Window::clear", crate::striv_window_clear as *const u8, "ii->i", false),
         ("Window::draw_rect", crate::striv_window_draw_rect as *const u8, "iiiiii->i", false),
+        ("Window::draw_circle", crate::striv_window_draw_circle as *const u8, "iiiii->i", false),
+        ("Window::draw_line", crate::striv_window_draw_line as *const u8, "iiiiii->i", false),
+        ("Window::draw_text", crate::striv_window_draw_text as *const u8, "iiiiii->i", false),
+        ("Window::is_key_down", crate::striv_window_is_key_down as *const u8, "ii->i", false),
+        ("Window::mouse_x", crate::striv_window_mouse_x as *const u8, "i->i", false),
+        ("Window::mouse_y", crate::striv_window_mouse_y as *const u8, "i->i", false),
+        ("Window::mouse_down", crate::striv_window_mouse_down as *const u8, "ii->i", false),
+        ("Window::mouse_scroll", crate::striv_window_mouse_scroll as *const u8, "i->f", false),
+        ("Window::width", crate::striv_window_width as *const u8, "i->i", false),
+        ("Window::height", crate::striv_window_height as *const u8, "i->i", false),
         ("Window::present", crate::striv_window_present as *const u8, "i->i", false),
+        ("to_int", striv_to_int as *const u8, "f->i", false),
         ("String::trim", striv_str_trim as *const u8, "i->i", false),
         ("String::contains", striv_str_contains as *const u8, "ii->i", false),
         ("String::starts_with", striv_str_starts_with as *const u8, "ii->i", false),
@@ -544,6 +558,8 @@ pub fn std_collection_symbols() -> Vec<(&'static str, *const u8, &'static str, b
         ("Heap::new", striv_heap_new as *const u8, "->i", false),
         ("Grid::new", striv_grid_new as *const u8, "iii->i", false),
         ("Bytes::new", striv_bytes_new as *const u8, "->i", false),
+        ("Bytes::write_f32", striv_bytes_write_f32 as *const u8, "if->i", true),
+        ("Bytes::clear", striv_bytes_clear as *const u8, "i->i", true),
         (
             "Bytes::read_file",
             striv_bytes_read_file as *const u8,
@@ -771,6 +787,11 @@ pub extern "C" fn striv_svec_to_bytes(v_ptr: *const RawStructVec) -> *mut Vec<u8
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn striv_to_int(x: f64) -> i64 {
+    x as i64
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn striv_str_trim(s: *const String) -> *mut String {
     Box::into_raw(Box::new(unsafe { (*s).trim().to_string() }))
 }
@@ -853,6 +874,114 @@ pub extern "C" fn striv_fs_write_text(path: *const String, data: *const String) 
         }
     }
     std::fs::write(rp, d).is_ok() as i64
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_bytes_write_f32(p: *mut Vec<u8>, v: f64) -> i64 {
+    unsafe { (*p).extend_from_slice(&(v as f32).to_le_bytes()) };
+    0
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_bytes_clear(p: *mut Vec<u8>) -> i64 {
+    unsafe { (*p).clear() };
+    0
+}
+
+#[repr(C)]
+pub struct StrivHostApi {
+    pub str_ptr: extern "C" fn(i64) -> *const u8,
+    pub str_len: extern "C" fn(i64) -> usize,
+    pub str_set: extern "C" fn(i64, *const u8, usize),
+    pub str_new: extern "C" fn(*const u8, usize) -> i64,
+    pub bytes_ptr: extern "C" fn(i64) -> *const u8,
+    pub bytes_len: extern "C" fn(i64) -> usize,
+    pub bytes_push_f32: extern "C" fn(i64, f32),
+    pub bytes_push_u32: extern "C" fn(i64, u32),
+    pub set_err: extern "C" fn(i64) -> i64,
+}
+
+extern "C" fn host_str_ptr(s: i64) -> *const u8 {
+    if s == 0 {
+        return std::ptr::null();
+    }
+    unsafe { (&*(s as *const String)).as_ptr() }
+}
+
+extern "C" fn host_str_len(s: i64) -> usize {
+    if s == 0 {
+        return 0;
+    }
+    unsafe { (&*(s as *const String)).len() }
+}
+
+extern "C" fn host_str_set(s: i64, ptr: *const u8, len: usize) {
+    if s == 0 || ptr.is_null() {
+        return;
+    }
+    let slice = unsafe { std::slice::from_raw_parts(ptr, len) };
+    if let Ok(txt) = std::str::from_utf8(slice) {
+        unsafe {
+            let st = &mut *(s as *mut String);
+            st.clear();
+            st.push_str(txt);
+        }
+    }
+}
+
+extern "C" fn host_str_new(ptr: *const u8, len: usize) -> i64 {
+    if ptr.is_null() || len == 0 {
+        return Box::into_raw(Box::new(String::new())) as i64;
+    }
+    let slice = unsafe { std::slice::from_raw_parts(ptr, len) };
+    let txt = String::from_utf8_lossy(slice).into_owned();
+    Box::into_raw(Box::new(txt)) as i64
+}
+
+extern "C" fn host_bytes_ptr(b: i64) -> *const u8 {
+    if b == 0 {
+        return std::ptr::null();
+    }
+    unsafe { (&*(b as *const Vec<u8>)).as_ptr() }
+}
+
+extern "C" fn host_bytes_len(b: i64) -> usize {
+    if b == 0 {
+        return 0;
+    }
+    unsafe { (&*(b as *const Vec<u8>)).len() }
+}
+
+extern "C" fn host_bytes_push_f32(b: i64, val: f32) {
+    if b != 0 {
+        unsafe { (*(b as *mut Vec<u8>)).extend_from_slice(&val.to_le_bytes()) };
+    }
+}
+
+extern "C" fn host_bytes_push_u32(b: i64, val: u32) {
+    if b != 0 {
+        unsafe { (*(b as *mut Vec<u8>)).extend_from_slice(&val.to_le_bytes()) };
+    }
+}
+
+extern "C" fn host_set_err(code: i64) -> i64 {
+    crate::striv_set_err(code)
+}
+
+static HOST_API: StrivHostApi = StrivHostApi {
+    str_ptr: host_str_ptr,
+    str_len: host_str_len,
+    str_set: host_str_set,
+    str_new: host_str_new,
+    bytes_ptr: host_bytes_ptr,
+    bytes_len: host_bytes_len,
+    bytes_push_f32: host_bytes_push_f32,
+    bytes_push_u32: host_bytes_push_u32,
+    set_err: host_set_err,
+};
+
+pub fn striv_host_api() -> &'static StrivHostApi {
+    &HOST_API
 }
 
 #[unsafe(no_mangle)]
