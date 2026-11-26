@@ -1,6 +1,6 @@
 import { CodeBlock } from '../components/CodeBlock'
 import { tr } from '../types/docs'
-import { ChapterProps, DocH1, DocH2, DocP, InlineCode } from './DocPrimitives'
+import { ChapterProps, DocH1, DocH2, DocP, DocTable, InlineCode } from './DocPrimitives'
 
 export function ConcurrencyChapter({ dialect, theme, lang }: ChapterProps) {
   return (
@@ -238,6 +238,47 @@ sync_step :: proc(mut c: SyncShip, mut s: SyncShip) {
     delta := c.pack_delta()
     s.apply_delta(delta)
 }`}
+      />
+
+      <DocH2 id="sync-transport" theme={theme}>
+        {tr(lang, 'Language vs. Your Engine (Transport-Agnostic)', 'Sprache vs. Deine Engine (kein Server-Zwang)')}
+      </DocH2>
+      <DocP theme={theme}>
+        {tr(
+          lang,
+          'Striv has no built-in host or server: sync only packs and unpacks changed bytes, while your game code decides whether to send them over UDP, QUIC, Steamworks P2P, or write pack_full() to disk as a savegame.',
+          'Striv erzwingt keinen eingebauten Host oder Server: sync übernimmt nur das automatische Ein- und Auspacken geänderter Bytes, während dein Spiel-Code entscheidet, ob die Pakete über UDP, QUIC, Steamworks-P2P verschickt oder mit pack_full() als Savegame gespeichert werden.',
+        )}
+      </DocP>
+      <DocTable
+        theme={theme}
+        headers={[
+          tr(lang, 'Task', 'Aufgabe'),
+          tr(lang, 'Striv (sync)', 'Macht Striv automatisch'),
+          tr(lang, 'Your Game Code', 'Dein Spiel-Code (Host / Client)'),
+        ]}
+        rows={[
+          [
+            tr(lang, 'Track changes', 'Änderungen merken'),
+            tr(lang, 'Sets dirty bit on ship.x += 10.0', 'Setzt unsichtbar das Dirty-Bit bei Wertänderung'),
+            tr(lang, 'Nothing — normal assignment', 'Nichts — normale Zuweisung'),
+          ],
+          [
+            tr(lang, 'Pack bytes', 'Paket schnüren'),
+            tr(lang, 'ship.pack_delta() -> Bytes', 'ship.pack_delta() liefert fertiges Bytes-Paket'),
+            tr(lang, 'Nothing — no manual byte counting', 'Nichts — kein manuelles Byte-Zählen'),
+          ],
+          [
+            tr(lang, 'Send & receive', 'Senden & Empfangen'),
+            tr(lang, 'Transport-agnostic', 'Mischt sich nicht ein (kein Engine-Zwang)'),
+            tr(lang, 'Host sends via UDP/QUIC/P2P to clients', 'Host sendet Bytes per UDP/QUIC/P2P an Clients'),
+          ],
+          [
+            tr(lang, 'Apply state', 'Werte anwenden'),
+            tr(lang, 'ship.apply_delta(pkt)', 'ship.apply_delta(pkt) trägt neue Werte ein'),
+            tr(lang, 'Client calls apply_delta on receive', 'Client ruft apply_delta bei Paketempfang auf'),
+          ],
+        ]}
       />
 
       <DocH2 id="rpc-fn" theme={theme}>
