@@ -613,9 +613,12 @@ pub fn emit_dynamic_bridge_crate(
                                  let enter_pressed = ui.input(|i| i.key_pressed(egui::Key::Enter));\n\
                                  let resp = ui.add(egui::TextEdit::singleline(&mut *s).desired_width(f32::INFINITY).hint_text(hint));\n\
                                  if enter_pressed && (resp.has_focus() || resp.lost_focus()) {\n\
-                                     cmd_out = s.trim().to_string();\n\
-                                     s.clear();\n\
-                                     submitted = 1;\n\
+                                     let trimmed = s.trim().to_string();\n\
+                                     if !trimmed.is_empty() {\n\
+                                         cmd_out = trimmed;\n\
+                                         s.clear();\n\
+                                         submitted = 1;\n\
+                                     }\n\
                                  }\n\
                                  resp.request_focus();\n\
                              }\n\
@@ -737,7 +740,8 @@ pub fn emit_dynamic_bridge_crate(
                                  })\n\
                              } else { false }\n\
                          });\n\
-                         if consumed { return; }\n\
+                         let is_f1 = matches!(&event, winit::event::WindowEvent::KeyboardInput { event: ke, .. } if matches!(ke.physical_key, winit::keyboard::PhysicalKey::Code(winit::keyboard::KeyCode::F1)));\n\
+                        if consumed && !is_f1 { return; }\n\
                      }\n\
                      match event {\n\
                          WindowEvent::CloseRequested => event_loop.exit(),\n\

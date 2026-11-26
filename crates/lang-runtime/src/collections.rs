@@ -847,6 +847,14 @@ pub extern "C" fn striv_str_to_float(s: *const String) -> f64 {
     unsafe { (*s).trim().parse::<f64>().unwrap_or(0.0) }
 }
 
+#[unsafe(no_mangle)]
+pub extern "C" fn striv_str_eq(a: *const String, b: *const String) -> i64 {
+    if a.is_null() || b.is_null() {
+        return (a == b) as i64;
+    }
+    unsafe { (*a == *b) as i64 }
+}
+
 std::thread_local! {
     static ACTIVE_MOD_DIR: std::cell::RefCell<Option<std::path::PathBuf>> =
         const { std::cell::RefCell::new(None) };

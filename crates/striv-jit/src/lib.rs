@@ -259,6 +259,7 @@ struct CompileEnv<'a> {
     str_print_ref: cranelift::codegen::ir::FuncRef,
     str_free_ref: cranelift::codegen::ir::FuncRef,
     str_clone_ref: cranelift::codegen::ir::FuncRef,
+    str_eq_ref: cranelift::codegen::ir::FuncRef,
     bytes_clone_ref: cranelift::codegen::ir::FuncRef,
     vec_clone_ref: cranelift::codegen::ir::FuncRef,
     svec_clone_ref: cranelift::codegen::ir::FuncRef,
@@ -569,6 +570,7 @@ impl JitCompiler {
             lang_runtime::striv_str_to_cstr as *const u8,
         );
         builder.symbol("striv_str_clone", lang_runtime::striv_str_clone as *const u8);
+        builder.symbol("striv_str_eq", lang_runtime::striv_str_eq as *const u8);
         builder.symbol("striv_bytes_clone", lang_runtime::striv_bytes_clone as *const u8);
         builder.symbol("striv_vec_clone", lang_runtime::striv_vec_clone as *const u8);
         builder.symbol("striv_svec_clone", lang_runtime::striv_svec_clone as *const u8);
@@ -1164,6 +1166,14 @@ impl JitCompiler {
             .module
             .declare_function("striv_str_clone", Linkage::Import, &sig_int_to_int)
             .unwrap();
+        let mut sig_two_int_to_int = self.module.make_signature();
+        sig_two_int_to_int.params.push(AbiParam::new(int_ty));
+        sig_two_int_to_int.params.push(AbiParam::new(int_ty));
+        sig_two_int_to_int.returns.push(AbiParam::new(int_ty));
+        let str_eq_id = self
+            .module
+            .declare_function("striv_str_eq", Linkage::Import, &sig_two_int_to_int)
+            .unwrap();
         let bytes_clone_id = self
             .module
             .declare_function("striv_bytes_clone", Linkage::Import, &sig_int_to_int)
@@ -1456,6 +1466,7 @@ impl JitCompiler {
                     str_print_ref: self.module.declare_func_in_func(str_print_id, builder.func),
                     str_free_ref: self.module.declare_func_in_func(str_free_id, builder.func),
                     str_clone_ref: self.module.declare_func_in_func(str_clone_id, builder.func),
+                    str_eq_ref: self.module.declare_func_in_func(str_eq_id, builder.func),
                     bytes_clone_ref: self.module.declare_func_in_func(bytes_clone_id, builder.func),
                     vec_clone_ref: self.module.declare_func_in_func(vec_clone_id, builder.func),
                     svec_clone_ref: self.module.declare_func_in_func(svec_clone_id, builder.func),
@@ -4728,6 +4739,20 @@ fn compile_expr(
             }
             let l = compile_expr(left, builder, vars, env);
             let r = compile_expr(right, builder, vars, env);
+            let is_str_val = |e: &Expr| match e {
+                Expr::StrInterp(_) => true,
+                Expr::Var(n) => matches!(vars.get(n), Some(VarInfo::Str { .. })),
+                _ => false,
+            };
+            if matches!(op, Op::Eq | Op::NotEq) && (is_str_val(left) || is_str_val(right)) {
+                let call = builder.ins().call(env.str_eq_ref, &[l, r]);
+                let eq_i64 = builder.inst_results(call)[0];
+                return if matches!(op, Op::Eq) {
+                    builder.ins().icmp_imm_s(IntCC::NotEqual, eq_i64, 0)
+                } else {
+                    builder.ins().icmp_imm_s(IntCC::Equal, eq_i64, 0)
+                };
+            }
             let is_float = builder.func.dfg.value_type(l) == types::F64
                 || builder.func.dfg.value_type(r) == types::F64;
             if is_float {
