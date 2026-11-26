@@ -164,6 +164,11 @@ pub enum Stmt {
         is_mut: bool,
         value: Expr,
     },
+    Declare {
+        name: String,
+        ty: String,
+        is_mut: bool,
+    },
     ForEach {
         var: String,
         is_mut: bool,
@@ -355,6 +360,8 @@ pub enum Token {
     True,
     #[token("false")]
     False,
+    #[token("null")]
+    Null,
     #[token("enum")]
     Enum,
     #[token("match")]
@@ -478,6 +485,8 @@ pub enum Token {
     EqEq,
     #[token("!=")]
     NotEq,
+    #[token("!")]
+    Bang,
     #[token("<=")]
     LtEq,
     #[token(">=")]
@@ -539,6 +548,7 @@ impl Token {
             Token::Const => "`const`".to_string(),
             Token::True => "`true`".to_string(),
             Token::False => "`false`".to_string(),
+            Token::Null => "`null`".to_string(),
             Token::Enum => "`enum`".to_string(),
             Token::Match => "`match`".to_string(),
             Token::Underscore => "`_`".to_string(),
@@ -600,6 +610,7 @@ impl Token {
             Token::Assign => "`=`".to_string(),
             Token::EqEq => "`==`".to_string(),
             Token::NotEq => "`!=`".to_string(),
+            Token::Bang => "`!`".to_string(),
             Token::LtEq => "`<=`".to_string(),
             Token::GtEq => "`>=`".to_string(),
             Token::AndAnd => "`&&`".to_string(),
@@ -1615,12 +1626,19 @@ impl Parser {
                 if self.dialect == Dialect::Odin && self.peek() == Some(&Token::Colon) {
                     self.next();
                     let ty = self.parse_type_name();
-                    self.expect(Token::Assign);
-                    return Stmt::Let {
+                    if self.peek() == Some(&Token::Assign) {
+                        self.next();
+                        return Stmt::Let {
+                            name,
+                            ty_hint: Some(ty),
+                            is_mut: true,
+                            value: self.parse_expr(),
+                        };
+                    }
+                    return Stmt::Declare {
                         name,
-                        ty_hint: Some(ty),
+                        ty,
                         is_mut: true,
-                        value: self.parse_expr(),
                     };
                 }
                 if self.peek() == Some(&Token::ColonColon) {
@@ -1909,6 +1927,15 @@ impl Parser {
             Some(Token::NoneKw) => Expr::None,
             Some(Token::True) => Expr::Int(1),
             Some(Token::False) => Expr::Int(0),
+            Some(Token::Null) => Expr::Int(0),
+            Some(Token::Bang) => {
+                let inner = self.parse_primary();
+                Expr::BinOp {
+                    left: Box::new(inner),
+                    op: Op::Eq,
+                    right: Box::new(Expr::Int(0)),
+                }
+            }
             Some(Token::Int(v)) => Expr::Int(v),
             Some(Token::Hex(v)) => Expr::Hex(v),
             Some(Token::Float(v)) => Expr::Float(v),
@@ -2136,7 +2163,7 @@ fn check_stmts_mut(
 ) {
     for stmt in stmts {
         match stmt {
-            Stmt::Let { name, is_mut, .. } => {
+            Stmt::Let { name, is_mut, .. } | Stmt::Declare { name, is_mut, .. } => {
                 mut_vars.insert(name.clone(), *is_mut);
             }
             Stmt::Shared { name, .. } => {

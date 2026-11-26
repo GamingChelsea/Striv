@@ -206,6 +206,11 @@ fn emit_stmt(stmt: &Stmt, structs: &HashSet<String>, level: usize, out: &mut Str
                 emit_expr(value, structs)
             ));
         }
+        Stmt::Declare { name, ty, is_mut } => {
+            let m = if *is_mut { "mut " } else { "" };
+            let rty = map_type(ty);
+            out.push_str(&format!("{}let {}{}: {} = Default::default();\n", ind, m, name, rty));
+        }
         Stmt::Let {
             name,
             ty_hint: _,

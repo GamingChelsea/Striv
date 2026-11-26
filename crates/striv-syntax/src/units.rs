@@ -174,6 +174,13 @@ fn check_stmts(
 ) -> Result<(), String> {
     for s in stmts {
         match s {
+            Stmt::Declare { name, ty, .. } => {
+                if let Some(dim) = env.known_units.get(ty) {
+                    vars.insert(name.clone(), (Some(dim.clone()), None));
+                } else {
+                    vars.insert(name.clone(), (None, Some(ty.clone())));
+                }
+            }
             Stmt::Let {
                 name,
                 ty_hint,
@@ -278,6 +285,11 @@ fn erase_expr(expr: &mut Expr) {
 fn erase_stmts(stmts: &mut [Stmt], known: &HashMap<String, Dim>) {
     for s in stmts {
         match s {
+            Stmt::Declare { ty, .. } => {
+                if known.contains_key(ty) {
+                    *ty = "float".to_string();
+                }
+            }
             Stmt::Let { ty_hint, value, .. } => {
                 if let Some(h) = ty_hint {
                     if known.contains_key(h) {

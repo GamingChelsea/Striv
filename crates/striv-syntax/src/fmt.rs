@@ -302,6 +302,14 @@ fn format_fn(f: &Function, display_name: &str, level: usize, out: &mut String) {
 fn format_stmt(stmt: &Stmt, level: usize, out: &mut String) {
     let ind = indent(level);
     match stmt {
+        Stmt::Declare { name, ty, is_mut } => {
+            if FMT_DIALECT.with(|d| d.get()) == crate::Dialect::Odin {
+                out.push_str(&format!("{}{}: {}\n", ind, name, ty));
+            } else {
+                let m = if *is_mut { "mut " } else { "" };
+                out.push_str(&format!("{}let {}{}: {}\n", ind, m, name, ty));
+            }
+        }
         Stmt::Let {
             name,
             ty_hint,

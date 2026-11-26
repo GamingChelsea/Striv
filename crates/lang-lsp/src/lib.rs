@@ -383,6 +383,7 @@ impl LanguageServer for StrivLsp {
             {
                 for (m, snip, det) in [
                     ("len", "len()", "fn len() -> int"),
+                    ("is_valid", "is_valid()", "fn is_valid() -> bool"),
                     ("write_u32", "write_u32(${1:val})", "fn write_u32(v: int)"),
                     ("write_i64", "write_i64(${1:val})", "fn write_i64(v: int)"),
                     ("write_f64", "write_f64(${1:val})", "fn write_f64(v: float)"),
@@ -697,7 +698,7 @@ impl LanguageServer for StrivLsp {
                 ..Default::default()
             });
         }
-        for kw in ["true", "false"] {
+        for kw in ["true", "false", "null"] {
             items.push(CompletionItem {
                 label: kw.to_string(),
                 kind: Some(CompletionItemKind::KEYWORD),
@@ -1377,7 +1378,7 @@ fn infer_expr_type(rhs: &str, prog: Option<&striv_syntax::Program>) -> String {
     if expr.starts_with('[') {
         return "Vec".to_string();
     }
-    if expr == "true" || expr == "false" {
+    if expr == "true" || expr == "false" || expr == "null" {
         return "bool".to_string();
     }
     if expr.starts_with('(') && expr.contains(',') {

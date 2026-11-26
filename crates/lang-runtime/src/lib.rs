@@ -747,6 +747,9 @@ pub fn box_any_handle<T: std::any::Any + Send + Sync>(val: T) -> i64 {
 }
 
 pub fn with_any_ref<T: std::any::Any, R>(id: i64, f: impl FnOnce(&T) -> R) -> R {
+    if id == 0 {
+        panic!("[Striv] Null-Handle Zugriff (id == 0) in with_any_ref!");
+    }
     let guard = any_map().read();
     let obj = guard
         .get(&id)
@@ -757,6 +760,9 @@ pub fn with_any_ref<T: std::any::Any, R>(id: i64, f: impl FnOnce(&T) -> R) -> R 
 }
 
 pub fn with_any_mut<T: std::any::Any, R>(id: i64, f: impl FnOnce(&mut T) -> R) -> R {
+    if id == 0 {
+        panic!("[Striv] Null-Handle Zugriff (id == 0) in with_any_mut!");
+    }
     let mut guard = any_map().write();
     let obj = guard
         .get_mut(&id)

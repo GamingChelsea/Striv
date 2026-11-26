@@ -413,8 +413,39 @@ striv switch-syntax odin src/main.strv`}
           ['Immutable Var', 'x := 10', 'let x = 10'],
           ['Mutable Var', 'hp := 100 (immer mut)', 'let mut hp = 100'],
           ['Typed Var', 'x : float = 10.0', 'let x: float = 10.0'],
+          ['Zero-Init / Declare', 'x: Ship / tex: TextureHandle', 'let mut tex: int = null'],
           ['C DLL Import', 'foreign "msvcrt.dll" { ... }', 'extern "msvcrt.dll" fn ...'],
         ]}
+      />
+
+      <DocH2 id="odin-zero-init" theme={theme}>
+        {tr(lang, 'Zero-Initialization & Null-Handles (null & .is_valid())', 'Zero-Initialisierung & Null-Handles (null & .is_valid())')}
+      </DocH2>
+      <DocP theme={theme}>
+        {tr(
+          lang,
+          'In Odin mode, pure type declarations (x: Type without =) are type-initialized by the JIT: primitives to 0/0.0, structs with their default fields, containers (Vec, Bytes, Ecs, String) via ::new(), and external handles to a safe 0 (null) checkable in 1 CPU cycle via .is_valid().',
+          'Im Odin-Modus werden reine Typ-Deklarationen (x: Typ ohne =) typgesteuert vom JIT initialisiert: Primitive auf 0/0.0, Structs inkl. Default-Feldern, Container (Vec, Bytes, Ecs, String) per ::new() und externe Handles auf ein sicheres 0 (null), prüfbar in 1 CPU-Takt über .is_valid().',
+        )}
+      </DocP>
+      <CodeBlock
+        dialect={dialect}
+        theme={theme}
+        filename="null_handles.strv"
+        code={`fn check_handle() -> int {
+    let mut tex = null
+    if !tex.is_valid() {
+        tex = 42
+    }
+    return tex
+}`}
+        odinCode={`check_handle :: proc() -> int {
+    tex: TextureHandle
+    if !tex.is_valid() {
+        tex = 42
+    }
+    return tex
+}`}
       />
 
       <DocH2 id="odin-examples" theme={theme}>

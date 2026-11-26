@@ -65,6 +65,7 @@ const STRIV_KEYWORDS = new Set([
   'Err',
   'Some',
   'None',
+  'null',
   'print',
 ])
 

@@ -1775,6 +1775,18 @@ fn compile_method_call(
     vars: &HashMap<String, VarInfo>,
     env: &mut CompileEnv,
 ) -> Value {
+    if method == "is_valid" {
+        let val = match vars.get(receiver) {
+            Some(VarInfo::Int { var, .. })
+            | Some(VarInfo::Str { var, .. })
+            | Some(VarInfo::Vec { var, .. })
+            | Some(VarInfo::StructVec { var, .. })
+            | Some(VarInfo::Bytes { var, .. }) => builder.use_var(*var),
+            _ => panic!("'{}' does not support .is_valid()", receiver),
+        };
+        let cmp = builder.ins().icmp_imm_s(IntCC::NotEqual, val, 0);
+        return builder.ins().uextend(env.int_ty, cmp);
+    }
     if matches!(
         method,
         "is_dirty" | "clear_dirty" | "pack_delta" | "pack_full" | "apply_delta"
@@ -2182,6 +2194,76 @@ fn compile_stmt(
                         },
                     );
                 }
+            }
+            false
+        }
+        Stmt::Declare { name, ty, is_mut } => {
+            if matches!(ty.as_str(), "float" | "f64" | "f32") {
+                let var = builder.declare_var(types::F64);
+                let z = builder.ins().f64const(0.0);
+                builder.def_var(var, z);
+                vars.insert(name.clone(), VarInfo::Float { var, is_mut: *is_mut });
+            } else if ty == "Vec" || ty.starts_with("Vec<") {
+                let synth = Stmt::Let {
+                    name: name.clone(),
+                    ty_hint: Some(ty.clone()),
+                    is_mut: *is_mut,
+                    value: Expr::VecLit(vec![]),
+                };
+                return compile_stmt(&synth, builder, vars, env, owned_strings, owned_vecs);
+            } else if matches!(ty.as_str(), "Bytes" | "Map" | "Deque" | "Channel" | "Ecs") {
+                let synth = Stmt::Let {
+                    name: name.clone(),
+                    ty_hint: Some(ty.clone()),
+                    is_mut: *is_mut,
+                    value: Expr::Call {
+                        name: format!("{}__new", ty),
+                        args: vec![],
+                    },
+                };
+                return compile_stmt(&synth, builder, vars, env, owned_strings, owned_vecs);
+            } else if ty == "String" {
+                let synth = Stmt::Let {
+                    name: name.clone(),
+                    ty_hint: Some(ty.clone()),
+                    is_mut: *is_mut,
+                    value: Expr::StrInterp(vec![]),
+                };
+                return compile_stmt(&synth, builder, vars, env, owned_strings, owned_vecs);
+            } else if let Some(def) = env.structs.get(ty).cloned() {
+                let byte_size = struct_byte_size(&def);
+                let slot = builder.create_sized_stack_slot(StackSlotData::new(
+                    StackSlotKind::ExplicitSlot,
+                    byte_size,
+                    3,
+                ));
+                let base = builder.ins().stack_addr(env.int_ty, slot, 0);
+                let zero = builder.ins().iconst(env.int_ty, 0);
+                for off in (0..byte_size).step_by(8) {
+                    if off + 8 <= byte_size {
+                        builder.ins().store(MemFlagsData::new(), zero, base, off as i32);
+                    }
+                }
+                for (df_name, df_expr) in &def.default_fields {
+                    let dv = compile_expr(df_expr, builder, vars, env);
+                    let off = field_offset(&def, df_name);
+                    let f_ty = field_type(&def, df_name);
+                    store_struct_field(builder, dv, base, off, f_ty);
+                }
+                vars.insert(
+                    name.clone(),
+                    VarInfo::Struct {
+                        slot,
+                        struct_name: ty.clone(),
+                        is_mut: *is_mut,
+                    },
+                );
+            } else {
+                // Primitives (int, i32, u32, u8, bool, cstr), simple enums, or external null handles (0)
+                let var = builder.declare_var(env.int_ty);
+                let z = builder.ins().iconst(env.int_ty, 0);
+                builder.def_var(var, z);
+                vars.insert(name.clone(), VarInfo::Int { var, is_mut: *is_mut });
             }
             false
         }
@@ -4180,6 +4262,9 @@ fn collect_parallel_in_stmts(
 ) {
     for stmt in stmts {
         match stmt {
+            Stmt::Declare { name, ty, is_mut } => {
+                local_types.insert(name.clone(), (ty.clone(), *is_mut));
+            }
             Stmt::Let {
                 name,
                 ty_hint,
@@ -4353,6 +4438,9 @@ fn collect_free_vars_in_stmts(
     let mut local_bound = bound.clone();
     for stmt in stmts {
         match stmt {
+            Stmt::Declare { name, .. } => {
+                local_bound.insert(name.clone());
+            }
             Stmt::Let { name, value, .. } => {
                 collect_free_vars_in_expr(value, &local_bound, out);
                 local_bound.insert(name.clone());
@@ -4901,5 +4989,38 @@ mod_tick :: proc() -> int {
                 .parse_program();
         let mut jit_odin = JitCompiler::new_sandboxed();
         let _ = jit_odin.compile_program(&prog_odin);
+    }
+
+    #[test]
+    fn test_declare_zero_init_and_null_handles() {
+        let odin_src = r#"
+Ship :: struct { x: float, hp: int = 100 }
+
+main :: proc() -> int {
+    count: int
+    ship: Ship
+    items: Vec
+    items.push(7)
+    tex: TextureHandle
+    if tex.is_valid() {
+        return -1
+    }
+    tex = 42
+    if !tex.is_valid() {
+        return -2
+    }
+    tex = null
+    if tex.is_valid() {
+        return -3
+    }
+    return count + ship.hp + items.len()
+}
+"#;
+        let prog = striv_syntax::Parser::new_with_dialect(odin_src, striv_syntax::Dialect::Odin)
+            .parse_program();
+        let mut jit = JitCompiler::new();
+        let ptr = jit.compile_program(&prog);
+        let f: fn() -> i64 = unsafe { std::mem::transmute(ptr) };
+        assert_eq!(f(), 101);
     }
 }

@@ -166,6 +166,9 @@ fn mono_stmts(
 ) {
     for stmt in stmts {
         match stmt {
+            Stmt::Declare { name, ty, .. } => {
+                var_types.insert(name.clone(), ty.clone());
+            }
             Stmt::Let {
                 name,
                 ty_hint,
@@ -351,6 +354,11 @@ fn mono_expr(
 
 fn subst_stmts(stmts: &mut [Stmt], subst: &HashMap<String, String>) {
     for stmt in stmts {
+        if let Stmt::Declare { ty, .. } = stmt {
+            if let Some(rep) = subst.get(ty) {
+                *ty = rep.clone();
+            }
+        }
         if let Stmt::Let { ty_hint, .. } = stmt {
             if let Some(th) = ty_hint {
                 if let Some(rep) = subst.get(th) {
