@@ -1,6 +1,6 @@
 import { CodeBlock } from '../components/CodeBlock'
 import { tr } from '../types/docs'
-import { ChapterProps, DocH1, DocH2, DocP, DocTable } from './DocPrimitives'
+import { ChapterProps, DocH1, DocH2, DocH3, DocP, DocTable } from './DocPrimitives'
 
 export function OverviewChapter({ dialect, theme, lang }: ChapterProps) {
   return (
@@ -231,8 +231,48 @@ striv fmt src/main.strv
 # Convert project between Rust and Odin dialects
 striv switch-syntax odin src/main.strv --kr
 
-# Start Language Server for VS Code
+# Start Language Server for VS Code & Zed
 striv lsp`}
+      />
+
+      <DocH3>
+        {tr(
+          lang,
+          'Downloads, VS Code Extension & Zed Editor',
+          'Downloads, VS Code Extension & Zed Editor',
+        )}
+      </DocH3>
+      <DocP theme={theme}>
+        {tr(
+          lang,
+          'Prebuilt binaries and editor extensions are published in GitHub Release v1.0.0 (striv.exe, striv-vscode-ext.zip, striv-zed-ext.zip). Place striv.exe on your system PATH so editors can launch striv lsp.',
+          'Fertige Binaries und Editor-Extensions liegen im GitHub Release v1.0.0 (striv.exe, striv-vscode-ext.zip, striv-zed-ext.zip). Lege striv.exe in deinen System-PATH, damit Editoren striv lsp starten können.',
+        )}
+      </DocP>
+      <DocTable
+        theme={theme}
+        headers={[
+          tr(lang, 'Editor', 'Editor'),
+          tr(lang, 'Package / Setup', 'Paket / Einrichtung'),
+        ]}
+        rows={[
+          [
+            'VS Code',
+            tr(
+              lang,
+              'Extract striv-vscode-ext.zip into %USERPROFILE%\\.vscode\\extensions\\striv-lang\\ and run npm install --omit=dev once.',
+              'striv-vscode-ext.zip nach %USERPROFILE%\\.vscode\\extensions\\striv-lang\\ entpacken und einmalig npm install --omit=dev ausführen.',
+            ),
+          ],
+          [
+            'Zed',
+            tr(
+              lang,
+              'Extract striv-zed-ext.zip and use Extensions → Install Dev Extension, or point lsp.striv.binary in settings.json to striv lsp.',
+              'striv-zed-ext.zip entpacken und in Zed Extensions → Install Dev Extension wählen (oder lsp.striv.binary in settings.json auf striv lsp setzen).',
+            ),
+          ],
+        ]}
       />
     </div>
   )
