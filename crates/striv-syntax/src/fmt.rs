@@ -124,6 +124,23 @@ pub fn format_program_with_options(
         out.push('\n');
     }
 
+    let base_units: Vec<_> = prog.units.iter().filter(|u| u.formula.is_none()).collect();
+    let derived_units: Vec<_> = prog.units.iter().filter(|u| u.formula.is_some()).collect();
+    for u in &base_units {
+        out.push_str(&format!("unit {}\n", u.name));
+    }
+    if !base_units.is_empty() && !derived_units.is_empty() {
+        out.push('\n');
+    }
+    for u in &derived_units {
+        if let Some(formula) = &u.formula {
+            out.push_str(&format!("unit {} = {}\n", u.name, format_unit_expr(formula)));
+        }
+    }
+    if !prog.units.is_empty() {
+        out.push('\n');
+    }
+
     for (n, expr) in &prog.consts {
         if dialect == crate::Dialect::Odin {
             out.push_str(&format!("{} :: {}\n", n, format_expr(expr)));
@@ -132,17 +149,6 @@ pub fn format_program_with_options(
         }
     }
     if !prog.consts.is_empty() {
-        out.push('\n');
-    }
-
-    for u in &prog.units {
-        if let Some(formula) = &u.formula {
-            out.push_str(&format!("unit {} = {}\n", u.name, format_unit_expr(formula)));
-        } else {
-            out.push_str(&format!("unit {}\n", u.name));
-        }
-    }
-    if !prog.units.is_empty() {
         out.push('\n');
     }
 

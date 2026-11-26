@@ -858,6 +858,10 @@ impl Parser {
                     let Some(Token::Ident(c_name)) = self.next() else {
                         self.error("Expected name after `const`");
                     };
+                    if self.peek() == Some(&Token::Colon) {
+                        self.next();
+                        let _ty = self.parse_type_name();
+                    }
                     self.expect(Token::Assign);
                     let expr = self.parse_expr();
                     consts.push((c_name, expr));
